@@ -1,3 +1,5 @@
 fastapi>=0.110,<1
-uvicorn>=0.29,<1
+uvicorn[standard]>=0.29,<1
 paramiko>=3.4,<4
+pillow>=10,<13
+ultralytics>=8,<9

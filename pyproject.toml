@@ -1,9 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "openclaw-yolo"
+name = "yolo-platform"
 version = "0.1.0"
-description = "YOLO 训练实验管理平台"
+description = "YOLO training experiment management platform"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.29,<1",
+    "paramiko>=3.4,<4",
+    "pillow>=10,<13",
+    "ultralytics>=8,<9",
+]
+
+[project.scripts]
+yolo-platform = "backend.api:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

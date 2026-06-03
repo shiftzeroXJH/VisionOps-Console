@@ -1,6 +1,6 @@
-from openclaw_yolo.constants import SEARCH_SPACE, TASK_BASELINES
-from openclaw_yolo.core.baseline import build_initial_params
-from openclaw_yolo.core.constraints import validate_param_value
+from backend.constants import SEARCH_SPACE, TASK_BASELINES
+from backend.core.baseline import build_initial_params
+from backend.core.constraints import validate_param_value
 
 
 def test_erasing_is_in_search_space() -> None:
@@ -23,3 +23,4 @@ def test_erasing_validation_rejects_out_of_range_values() -> None:
         assert "invalid value for 'erasing'" in str(exc)
     else:
         raise AssertionError("expected validate_param_value to reject erasing > 1.0")
+

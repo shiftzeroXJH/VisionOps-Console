@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 
-from openclaw_yolo.core.dataset import analyze_dataset
-from openclaw_yolo.service import OrchestratorService
-from openclaw_yolo.models import TrialRecord
+from backend.core.dataset import analyze_dataset
+from backend.service import OrchestratorService
+from backend.models import TrialRecord
 
 
 def _write_file(path: Path, content: str = "") -> None:
@@ -509,8 +509,11 @@ def test_validate_trial_preview_returns_result_without_db_event(tmp_path: Path, 
         )
     )
 
+    captured_run_kwargs = {}
+
     def fake_run(*args, **kwargs):
-        del args, kwargs
+        del args
+        captured_run_kwargs.update(kwargs)
         return subprocess.CompletedProcess(
             args=[],
             returncode=0,
@@ -518,7 +521,7 @@ def test_validate_trial_preview_returns_result_without_db_event(tmp_path: Path, 
             stderr="",
         )
 
-    monkeypatch.setattr("openclaw_yolo.service.subprocess.run", fake_run)
+    monkeypatch.setattr("backend.service.subprocess.run", fake_run)
 
     result = service.validate_trial_preview("trial_validation_success", image_limit=3, conf=0.2)
 
@@ -530,6 +533,8 @@ def test_validate_trial_preview_returns_result_without_db_event(tmp_path: Path, 
     assert result["images"][0]["filename"] == "0001_a.jpg"
     assert result["validation_id"].startswith("val_")
     assert service.repo.latest_event(experiment_id, "TRIAL_VALIDATION_PREVIEW") is None
+    assert captured_run_kwargs["encoding"] == "utf-8"
+    assert captured_run_kwargs["errors"] == "replace"
 
 
 def test_clear_validation_preview_cache_deletes_only_preview_dirs(tmp_path: Path) -> None:
@@ -572,3 +577,22 @@ def test_clear_validation_preview_cache_deletes_only_preview_dirs(tmp_path: Path
     assert result["deleted_bytes"] == len("preview-cache")
     assert not (run_dir / ".validation_previews").exists()
     assert keep_file.exists()
+
+
+def test_default_db_migrates_old_openclaw_filename(tmp_path: Path, monkeypatch) -> None:
+    old_db = tmp_path / "openclaw_yolo_state.sqlite"
+    old_db.write_bytes(b"legacy db")
+    monkeypatch.chdir(tmp_path)
+
+    class FakeRepository:
+        def __init__(self, db_path: str) -> None:
+            self.db_path = db_path
+
+    monkeypatch.setattr("backend.service.Repository", FakeRepository)
+
+    service = OrchestratorService()
+
+    new_db = tmp_path / "yolo_state.sqlite"
+    assert new_db.read_bytes() == b"legacy db"
+    assert service.repo.db_path == str(new_db.resolve())
+

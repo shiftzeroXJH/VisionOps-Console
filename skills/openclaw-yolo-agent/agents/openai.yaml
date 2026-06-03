@@ -1,7 +1,0 @@
-interface:
-  display_name: "OpenClaw YOLO Agent"
-  short_description: "Operate local YOLO training through the bridge client."
-  default_prompt: "Use $openclaw-yolo-agent to manage YOLO tasks through the local bridge client."
-
-policy:
-  allow_implicit_invocation: true

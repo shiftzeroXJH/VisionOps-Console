@@ -1,4 +1,4 @@
-﻿import { useState } from 'react'
+import { useState } from 'react'
 import { api } from '../api'
 
 interface Props {
@@ -45,7 +45,7 @@ export function LocalTrialDialog({ experimentId, onClose, onImported }: Props) {
 
         <div className="flex-col gap-2">
           <label>本地 run 目录</label>
-          <input className="input" value={runDir} onChange={(event) => setRunDir(event.target.value)} placeholder="D:/project/openclaw_yolo/runs/detect/train42" />
+          <input className="input" value={runDir} onChange={(event) => setRunDir(event.target.value)} placeholder="D:/project/yolo_platform/runs/detect/train42" />
         </div>
 
         <div className="flex-col gap-2">
@@ -72,3 +72,5 @@ export function LocalTrialDialog({ experimentId, onClose, onImported }: Props) {
     </div>
   )
 }
+
+
