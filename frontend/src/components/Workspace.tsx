@@ -32,13 +32,14 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
   const [detail, setDetail] = useState<any>(null)
   const [comparison, setComparison] = useState<any>(null)
   const [selectedTrialId, setSelectedTrialId] = useState<string | null>(null)
-  const [trialToDelete, setTrialToDelete] = useState<string | null>(null)
+  const [trialToDelete, setTrialToDelete] = useState<{ trial_id: string; display_name?: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
   const [showParameterDrawer, setShowParameterDrawer] = useState(false)
   const [chartData, setChartData] = useState<any[]>([])
   const [trialIds, setTrialIds] = useState<string[]>([])
+  const [trialLabels, setTrialLabels] = useState<Record<string, string>>({})
   const [showCurves, setShowCurves] = useState(false)
   const [showLocalDialog, setShowLocalDialog] = useState(false)
   const [showRemoteDialog, setShowRemoteDialog] = useState(false)
@@ -63,6 +64,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
       if (curvesData?.curves) {
         const topTrials = Object.keys(curvesData.curves).sort().reverse().slice(0, 5)
         setTrialIds(topTrials)
+        setTrialLabels(curvesData.trial_labels || {})
         const epochs = new Set<number>()
         Object.values(curvesData.curves).forEach((rows: any) => rows.forEach((row: any) => epochs.add(row.epoch)))
         const maxEpoch = Math.max(0, ...Array.from(epochs))
@@ -82,6 +84,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
         setChartData(points)
       } else {
         setChartData([])
+        setTrialLabels({})
       }
     } finally {
       setLoading(false)
@@ -233,7 +236,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
                     <Tooltip contentStyle={{ borderRadius: 8, border: 'none', boxShadow: 'var(--shadow-md)', background: 'rgba(255,255,255,0.95)' }} />
                     <Legend wrapperStyle={{ fontSize: 11, paddingTop: '4px' }} iconType="circle" iconSize={8} />
                     {trialIds.map((trialId, index) => (
-                      <Line key={trialId} type="monotone" dataKey={`${trialId}.map`} name={trialId} stroke={CHART_COLORS[index % CHART_COLORS.length]} strokeWidth={2} dot={false} connectNulls activeDot={{ r: 4 }} />
+                      <Line key={trialId} type="monotone" dataKey={`${trialId}.map`} name={trialLabels[trialId] || trialId} stroke={CHART_COLORS[index % CHART_COLORS.length]} strokeWidth={2} dot={false} connectNulls activeDot={{ r: 4 }} />
                     ))}
                   </LineChart>
                 </ResponsiveContainer>
@@ -248,7 +251,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
                     <Tooltip contentStyle={{ borderRadius: 8, border: 'none', boxShadow: 'var(--shadow-md)', background: 'rgba(255,255,255,0.95)' }} />
                     <Legend wrapperStyle={{ fontSize: 11, paddingTop: '4px' }} iconType="circle" iconSize={8} />
                     {trialIds.map((trialId, index) => (
-                      <Line key={trialId} type="monotone" dataKey={`${trialId}.recall`} name={trialId} stroke={CHART_COLORS[index % CHART_COLORS.length]} strokeWidth={2} dot={false} connectNulls activeDot={{ r: 4 }} />
+                      <Line key={trialId} type="monotone" dataKey={`${trialId}.recall`} name={trialLabels[trialId] || trialId} stroke={CHART_COLORS[index % CHART_COLORS.length]} strokeWidth={2} dot={false} connectNulls activeDot={{ r: 4 }} />
                     ))}
                   </LineChart>
                 </ResponsiveContainer>
@@ -297,11 +300,11 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
       {trialToDelete && (
         <DeleteDialog
           title="删除训练记录"
-          message={`确定删除训练记录 ${trialToDelete} 吗？`}
+          message={`确定删除训练记录 ${trialToDelete.display_name || trialToDelete.trial_id} 吗？`}
           dangerousMessage="同时删除本地托管文件"
           onClose={() => setTrialToDelete(null)}
           onConfirm={async (keepFiles) => {
-            await handleDeleteTrial(trialToDelete, keepFiles)
+            await handleDeleteTrial(trialToDelete.trial_id, keepFiles)
             setTrialToDelete(null)
           }}
         />

@@ -14,6 +14,7 @@ class GoalConfig:
 class ExperimentConfig:
     experiment_id: str
     description: str
+    project: str
     session_key: str
     task_type: str
     dataset_root: str
@@ -37,6 +38,7 @@ class ExperimentConfig:
 @dataclass
 class TrialRecord:
     trial_id: str
+    display_name: str
     experiment_id: str
     iteration: int
     params: dict[str, Any]
@@ -60,6 +62,7 @@ class TrialRecord:
     last_synced_epoch_count: int = 0
     unchanged_sync_count: int = 0
     last_synced_at: str = ""
+    dataset_analysis: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

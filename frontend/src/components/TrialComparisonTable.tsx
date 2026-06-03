@@ -1,9 +1,9 @@
-﻿import { CheckCircle2, CircleDashed, Loader2, Trash2, XCircle } from 'lucide-react'
+import { CheckCircle2, CircleDashed, Loader2, Trash2, XCircle } from 'lucide-react'
 
 interface Props {
   data: any
   onRowClick: (trialId: string) => void
-  onRequestDeleteTrial: (trialId: string) => void
+  onRequestDeleteTrial: (trial: { trial_id: string; display_name?: string }) => void
 }
 
 export function TrialComparisonTable({ data, onRowClick, onRequestDeleteTrial }: Props) {
@@ -25,7 +25,7 @@ export function TrialComparisonTable({ data, onRowClick, onRequestDeleteTrial }:
   }
 
   const cols = [
-    'iteration', 'trial_id', 'status', 'model_display', 'source', 'server',
+    'iteration', 'display_name', 'status', 'model_display', 'source', 'server',
     'map50_95', 'delta_map50_95', 'precision', 'recall',
     'best_epoch', 'epochs_completed', 'imgsz', 'batch', 'lr0', 'patience',
   ]
@@ -79,7 +79,7 @@ export function TrialComparisonTable({ data, onRowClick, onRequestDeleteTrial }:
       <table>
         <thead style={{ position: 'sticky', top: 0, zIndex: 10 }}>
           <tr>
-            {cols.map((col) => <th key={col}>{col.replace(/_/g, ' ')}</th>)}
+            {cols.map((col) => <th key={col}>{col === 'display_name' ? 'Trial' : col.replace(/_/g, ' ')}</th>)}
             <th>备注</th>
             <th>操作</th>
           </tr>
@@ -92,7 +92,7 @@ export function TrialComparisonTable({ data, onRowClick, onRequestDeleteTrial }:
               style={{ cursor: 'pointer', backgroundColor: row.is_best ? 'rgba(16,185,129,0.06)' : undefined }}
             >
               {cols.map((col) => (
-                <td key={col} style={{ fontWeight: col === 'map50_95' || (col === 'trial_id' && row.is_best) ? 700 : undefined }}>
+                <td key={col} style={{ fontWeight: col === 'map50_95' || (col === 'display_name' && row.is_best) ? 700 : undefined }}>
                   {cellValue(row, col)}
                 </td>
               ))}
@@ -101,7 +101,7 @@ export function TrialComparisonTable({ data, onRowClick, onRequestDeleteTrial }:
                 <button
                   className="btn btn-danger"
                   style={{ padding: '0.2rem 0.4rem', backgroundColor: 'transparent', color: 'var(--danger-color)', border: 'none', boxShadow: 'none' }}
-                  onClick={(event) => { event.stopPropagation(); onRequestDeleteTrial(row.trial_id) }}
+                  onClick={(event) => { event.stopPropagation(); onRequestDeleteTrial({ trial_id: row.trial_id, display_name: row.display_name }) }}
                   title="删除训练记录"
                 >
                   <Trash2 size={16} />

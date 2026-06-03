@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 import posixpath
+import re
 import shlex
 import subprocess
 import shutil
 import stat
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -31,7 +33,7 @@ from openclaw_yolo.constants import (
 from openclaw_yolo.core.analyzer import build_summary
 from openclaw_yolo.core.baseline import build_initial_params
 from openclaw_yolo.core.constraints import validate_param_value
-from openclaw_yolo.core.dataset import inspect_dataset
+from openclaw_yolo.core.dataset import analyze_dataset, inspect_dataset
 from openclaw_yolo.core.param_search import ProposalValidationError, validate_continue_request
 from openclaw_yolo.core.trainer import (
     TrainingCancelledError,
@@ -39,7 +41,7 @@ from openclaw_yolo.core.trainer import (
     cancel_training_process,
     run_training,
 )
-from openclaw_yolo.db.repository import Repository
+from openclaw_yolo.db.repository import Repository, default_project_name
 from openclaw_yolo.models import ExperimentConfig, GoalConfig, RemoteServer, TrialRecord
 from openclaw_yolo.utils import ensure_dir, read_json, utc_now_iso, write_json
 
@@ -64,6 +66,8 @@ MODEL_FILENAME_ALIASES = {
     "yolov11n-seg.pt": "yolo11n-seg.pt",
     "yolov11n-obb.pt": "yolo11n-obb.pt",
 }
+DEFAULT_YOLO_PYTHON = r"D:\apps\miniforge\envs\yolo_env\python.exe"
+ILLEGAL_WINDOWS_NAME_CHARS = set('<>:"/\\|?*')
 
 
 def _parse_scalar_yaml_value(raw_value: str) -> Any:
@@ -116,6 +120,84 @@ def _model_stem(model: str) -> str:
         cleaned.append(char if char.isalnum() else "_")
     value = "".join(cleaned).strip("_")
     return value or "model"
+
+
+def _validate_export_model_name(model_name: str) -> str:
+    normalized = str(model_name or "").strip()
+    if not normalized:
+        raise ServiceError("model_name is required")
+    if normalized[-1] in {".", " "}:
+        raise ServiceError("model_name cannot end with a dot or space")
+    illegal = sorted({char for char in normalized if char in ILLEGAL_WINDOWS_NAME_CHARS or ord(char) < 32})
+    if illegal:
+        raise ServiceError(f"model_name contains illegal characters: {' '.join(illegal)}")
+    return normalized
+
+
+def _export_weight_path(run_dir: str) -> Path:
+    base = Path(run_dir)
+    candidates = [
+        base / "weights" / "best.pt",
+        base / "weights" / "last.pt",
+        base / "best.pt",
+        base / "last.pt",
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate.resolve()
+    raise ServiceError(f"no exportable weight file found under run_dir: {run_dir}")
+
+
+def _trial_weight_path(run_dir: str) -> Path:
+    try:
+        return _export_weight_path(run_dir)
+    except ServiceError as exc:
+        raise ServiceError(f"no validation weight file found under run_dir: {run_dir}") from exc
+
+
+def _export_filename(model_name: str, model: str, task_type: str, imgsz: int) -> str:
+    del task_type
+    return f"{model_name}-{_model_stem(model)}-{int(imgsz)}.onnx"
+
+
+def _python_for_yolo() -> str:
+    configured = os.environ.get("OPENCLAW_YOLO_PYTHON", "").strip()
+    if configured:
+        return configured
+    if Path(DEFAULT_YOLO_PYTHON).exists():
+        return DEFAULT_YOLO_PYTHON
+    return sys.executable
+
+
+def _safe_validation_id() -> str:
+    return datetime.now(timezone.utc).strftime("val_%Y%m%d_%H%M%S_%f")
+
+
+def _validate_preview_filename(filename: str) -> str:
+    normalized = str(filename or "").strip()
+    if not normalized:
+        raise ServiceError("filename is required")
+    if "/" in normalized or "\\" in normalized or normalized in {".", ".."}:
+        raise ServiceError("invalid filename")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", normalized):
+        raise ServiceError("invalid filename")
+    return normalized
+
+
+def _directory_size(path: Path) -> tuple[int, int]:
+    total_files = 0
+    total_bytes = 0
+    if not path.exists():
+        return total_files, total_bytes
+    for item in path.rglob("*"):
+        if not item.is_file():
+            continue
+        total_files += 1
+        try:
+            total_bytes += item.stat().st_size
+        except OSError:
+            continue
+    return total_files, total_bytes
 
 
 def _params_from_args(args: dict[str, Any]) -> dict[str, Any]:
@@ -232,14 +314,14 @@ def _resolve_session_id(session_key: str) -> str:
 
 def _build_notify_message(
     config: ExperimentConfig,
-    trial_id: str,
+    trial_name: str,
     compact_summary: dict[str, Any],
 ) -> str:
     metric_value = compact_summary.get("final_metrics", {}).get(config.goal.metric)
     target_reached = isinstance(metric_value, (int, float)) and float(metric_value) >= config.goal.target
     payload = {
         "experiment_id": config.experiment_id,
-        "trial_id": trial_id,
+        "trial_id": trial_name,
         "goal": {
             "metric": config.goal.metric,
             "target": config.goal.target,
@@ -435,6 +517,7 @@ class OrchestratorService:
         self,
         *,
         description: str,
+        project: str | None = None,
         task_type: str,
         dataset_root: str,
         dataset_yaml: str | None,
@@ -466,6 +549,8 @@ class OrchestratorService:
         elif not Path(dataset_yaml).exists():
             raise ServiceError(f"dataset yaml not found: {dataset_yaml}")
 
+        normalized_description = description.strip()
+        normalized_project = (project or "").strip() or default_project_name(normalized_description)
         resolved_pretrained = _resolve_pretrained_model(pretrained)
         _validate_pretrained_model(resolved_pretrained)
         experiment_id = self.repo.next_experiment_id()
@@ -473,7 +558,8 @@ class OrchestratorService:
         initial_overrides = dict(initial_params or {})
         config = ExperimentConfig(
             experiment_id=experiment_id,
-            description=description.strip(),
+            description=normalized_description,
+            project=normalized_project,
             session_key=normalized_session_key,
             task_type=task_type,
             dataset_root=str(Path(dataset_root).resolve()),
@@ -495,6 +581,7 @@ class OrchestratorService:
             "status": config.status,
             "experiment_id": experiment_id,
             "description": config.description,
+            "project": config.project,
             "session_key": config.session_key,
             "dataset_yaml": config.dataset_yaml,
             "initial_params": config.initial_params,
@@ -518,6 +605,7 @@ class OrchestratorService:
     ) -> dict[str, Any]:
         return self.create_experiment(
             description=description,
+            project=initial_overrides.pop("project", None),
             session_key=session_key,
             task_type=task_type,
             dataset_root=dataset_root,
@@ -540,6 +628,7 @@ class OrchestratorService:
                     {
                         "experiment_id": item.experiment_id,
                         "description": item.description,
+                        "project": item.project,
                         "session_key": item.session_key,
                         "status": item.status,
                     }
@@ -551,6 +640,7 @@ class OrchestratorService:
                 {
                     "experiment_id": item.experiment_id,
                     "description": item.description,
+                    "project": item.project,
                     "session_key": item.session_key,
                     "task_type": item.task_type,
                     "status": item.status,
@@ -586,6 +676,7 @@ class OrchestratorService:
                 {
                     "experiment_id": config.experiment_id,
                     "description": config.description,
+                    "project": config.project,
                     "status": config.status,
                     "task_type": config.task_type,
                     "dataset_root": config.dataset_root,
@@ -621,17 +712,36 @@ class OrchestratorService:
             "trials": [self._trial_row(trial) for trial in trials],
         }
 
-    def update_experiment(self, experiment_id: str, *, description: str | None = None) -> dict[str, Any]:
+    def update_experiment(
+        self,
+        experiment_id: str,
+        *,
+        description: str | None = None,
+        project: str | None = None,
+    ) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)
-        if description is None:
+        if description is None and project is None:
             return {"experiment": config.to_dict()}
 
-        normalized_description = description.strip()
-        if not normalized_description:
-            raise ServiceError("description cannot be empty")
+        normalized_description = None
+        if description is not None:
+            normalized_description = description.strip()
+            if not normalized_description:
+                raise ServiceError("description cannot be empty")
 
-        self.repo.update_experiment_description(experiment_id, normalized_description)
-        config.description = normalized_description
+        normalized_project = None
+        if project is not None:
+            normalized_project = project.strip() or default_project_name(normalized_description or config.description)
+
+        self.repo.update_experiment(
+            experiment_id,
+            description=normalized_description,
+            project=normalized_project,
+        )
+        if normalized_description is not None:
+            config.description = normalized_description
+        if normalized_project is not None:
+            config.project = normalized_project
 
         experiment_json = Path(config.save_root) / "experiments" / experiment_id / EXPERIMENT_FILENAME
         if experiment_json.exists():
@@ -640,7 +750,7 @@ class OrchestratorService:
         self.repo.add_event(
             experiment_id,
             "EXPERIMENT_UPDATED",
-            {"description": normalized_description},
+            {"description": config.description, "project": config.project},
         )
         return {"experiment": config.to_dict()}
 
@@ -667,6 +777,7 @@ class OrchestratorService:
                 if latest_trial is None
                 else {
                     "trial_id": latest_trial.trial_id,
+                    "display_name": latest_trial.display_name,
                     "iteration": latest_trial.iteration,
                     "status": latest_trial.status,
                     "metrics": latest_trial.metrics,
@@ -884,6 +995,38 @@ class OrchestratorService:
             "warnings": warnings,
         }
 
+    def clear_validation_preview_cache(self) -> dict[str, Any]:
+        experiments = self.repo.list_experiments()
+        deleted_dirs = 0
+        deleted_files = 0
+        deleted_bytes = 0
+        warnings: list[str] = []
+        for config in experiments:
+            experiment_dir = (Path(config.save_root).resolve() / "experiments" / config.experiment_id).resolve()
+            for trial in self.repo.list_trials(config.experiment_id):
+                run_dir = Path(trial.run_dir).resolve()
+                preview_dir = (run_dir / ".validation_previews").resolve()
+                if not preview_dir.exists():
+                    continue
+                if experiment_dir not in preview_dir.parents and run_dir not in preview_dir.parents:
+                    warnings.append(f"skipped unsafe validation cache path: {preview_dir}")
+                    continue
+                files, size = _directory_size(preview_dir)
+                try:
+                    shutil.rmtree(preview_dir, onerror=_handle_rmtree_error)
+                    deleted_dirs += 1
+                    deleted_files += files
+                    deleted_bytes += size
+                except Exception as exc:
+                    warnings.append(f"failed to delete {preview_dir}: {exc}")
+        return {
+            "status": "cleared",
+            "deleted_dirs": deleted_dirs,
+            "deleted_files": deleted_files,
+            "deleted_bytes": deleted_bytes,
+            "warnings": warnings,
+        }
+
     def run_trial(
         self,
         experiment_id: str,
@@ -903,11 +1046,14 @@ class OrchestratorService:
         trial_params = validation["normalized_params"]
         trial_model = _resolve_pretrained_model(pretrained or config.pretrained_model)
         _validate_pretrained_model(trial_model)
-        trial_id = self._next_named_trial_id(experiment_id, trial_model, trial_params)
-        trial_dir = ensure_dir(Path(config.save_root) / "experiments" / experiment_id / trial_id)
+        display_name = self._next_trial_display_name(experiment_id, trial_model, trial_params)
+        trial_id = self.repo.next_trial_id()
+        trial_dir = ensure_dir(Path(config.save_root) / "experiments" / experiment_id / display_name)
         status = STATE_TRAINING if iteration == 1 else STATE_RETRAINING
+        dataset_analysis = analyze_dataset(config.dataset_yaml)
         trial = TrialRecord(
             trial_id=trial_id,
+            display_name=display_name,
             experiment_id=experiment_id,
             iteration=iteration,
             params=trial_params,
@@ -919,6 +1065,7 @@ class OrchestratorService:
             model=trial_model,
             model_source="manual" if pretrained else "experiment_default",
             params_source="manual",
+            dataset_analysis=dataset_analysis,
         )
         write_json(trial_dir / TRIAL_CONFIG_FILENAME, trial_params)
         self.repo.create_trial(trial)
@@ -928,6 +1075,7 @@ class OrchestratorService:
             "TRIAL_STARTED",
             {
                 "trial_id": trial_id,
+                "display_name": display_name,
                 "params": trial_params,
                 "model": trial_model,
                 "note": trial.note,
@@ -941,7 +1089,7 @@ class OrchestratorService:
                 pretrained_model=trial_model,
                 dataset_yaml=config.dataset_yaml,
                 run_dir=str(trial_dir),
-                trial_name=trial_id,
+                trial_name=display_name,
                 params=trial_params,
                 process_key=experiment_id,
             )
@@ -956,6 +1104,7 @@ class OrchestratorService:
                 return {
                     "status": STATE_CANCELLED,
                     "trial_id": trial_id,
+                    "display_name": display_name,
                     "run_dir": training_result["run_dir"],
                     "stdout_log": training_result["stdout_log"],
                     "stderr_log": training_result["stderr_log"],
@@ -988,6 +1137,7 @@ class OrchestratorService:
             return {
                 "status": next_status,
                 "trial_id": trial_id,
+                "display_name": display_name,
                 "run_dir": run_dir,
                 "stdout_log": training_result["stdout_log"],
                 "stderr_log": training_result["stderr_log"],
@@ -1006,6 +1156,7 @@ class OrchestratorService:
             return {
                 "status": STATE_CANCELLED,
                 "trial_id": trial_id,
+                "display_name": display_name,
                 "run_dir": str(trial_dir),
             }
         except TrainingError as exc:
@@ -1016,6 +1167,7 @@ class OrchestratorService:
 
     def get_summary(self, trial_id: str, compact: bool = False) -> dict[str, Any]:
         trial = self.repo.get_trial(trial_id)
+        config = self.repo.get_experiment(trial.experiment_id)
         if not trial.summary_path:
             summary: dict[str, Any] = {
                 "trial_id": trial_id,
@@ -1034,6 +1186,7 @@ class OrchestratorService:
         if compact:
             return {
                 "trial_id": trial_id,
+                "display_name": trial.display_name,
                 "run_dir": trial.run_dir,
                 "summary_path": trial.summary_path,
                 "source": trial.source,
@@ -1058,10 +1211,13 @@ class OrchestratorService:
                 "metric_breakdown_delta_vs_prev": summary.get("metric_breakdown_delta_vs_prev", {}),
                 "training_dynamics": summary.get("training_dynamics", {}),
                 "warnings": summary.get("warnings", []),
+                "dataset_analysis": trial.dataset_analysis,
             }
         summary["trial"] = {
             "trial_id": trial.trial_id,
+            "display_name": trial.display_name,
             "experiment_id": trial.experiment_id,
+            "task_type": config.task_type,
             "iteration": trial.iteration,
             "status": trial.status,
             "run_dir": trial.run_dir,
@@ -1081,8 +1237,194 @@ class OrchestratorService:
             "last_synced_at": trial.last_synced_at,
             "last_synced_epoch_count": trial.last_synced_epoch_count,
             "logs": logs,
+            "imgsz": int(summary.get("params", {}).get("imgsz") or trial.params.get("imgsz") or 0),
         }
+        summary["dataset_analysis"] = trial.dataset_analysis
         return summary
+
+    def rename_trial(self, trial_id: str, display_name: str) -> dict[str, Any]:
+        trial = self.repo.get_trial(trial_id)
+        normalized = self._validate_trial_display_name(display_name)
+        if normalized == trial.display_name:
+            return {
+                "trial_id": trial.trial_id,
+                "display_name": trial.display_name,
+                "experiment_id": trial.experiment_id,
+            }
+        if self.repo.trial_display_name_exists(trial.experiment_id, normalized, exclude_trial_id=trial_id):
+            raise ServiceError(f"trial name already exists in experiment: {normalized}")
+        self.repo.update_trial(trial_id, display_name=normalized)
+        self.repo.add_event(
+            trial.experiment_id,
+            "TRIAL_RENAMED",
+            {
+                "trial_id": trial_id,
+                "display_name": normalized,
+                "previous_display_name": trial.display_name,
+            },
+            trial_id,
+        )
+        return {
+            "trial_id": trial.trial_id,
+            "display_name": normalized,
+            "experiment_id": trial.experiment_id,
+        }
+
+    def export_trial_onnx(
+        self,
+        trial_id: str,
+        *,
+        model_name: str,
+        output_dir: str,
+    ) -> dict[str, Any]:
+        trial = self.repo.get_trial(trial_id)
+        config = self.repo.get_experiment(trial.experiment_id)
+        normalized_model_name = _validate_export_model_name(model_name)
+        raw_output_dir = str(output_dir or "").strip()
+        if not raw_output_dir:
+            raise ServiceError("output_dir is required")
+        normalized_output_dir = str(Path(raw_output_dir).expanduser().resolve())
+
+        imgsz = int(trial.params.get("imgsz") or 0)
+        if imgsz <= 0:
+            raise ServiceError(f"invalid imgsz for trial {trial_id}: {trial.params.get('imgsz')}")
+
+        weight_path = _export_weight_path(trial.run_dir)
+        output_filename = _export_filename(normalized_model_name, trial.model, config.task_type, imgsz)
+        output_path = Path(normalized_output_dir) / output_filename
+        if output_path.exists():
+            raise ServiceError(f"target file already exists: {output_path}")
+
+        request_path = Path(trial.run_dir) / ".export_onnx_request.json"
+        write_json(
+            request_path,
+            {
+                "model_path": str(weight_path),
+                "imgsz": imgsz,
+                "output_path": str(output_path),
+            },
+        )
+
+        python_executable = _python_for_yolo()
+        env = dict(os.environ)
+        src_root = str(Path(__file__).resolve().parent.parent)
+        env["PYTHONPATH"] = src_root if not env.get("PYTHONPATH") else f"{src_root}{os.pathsep}{env['PYTHONPATH']}"
+        process = subprocess.run(
+            [python_executable, "-m", "openclaw_yolo.core.export_worker", str(request_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(Path(__file__).resolve().parent.parent.parent),
+            env=env,
+        )
+        if process.returncode != 0:
+            stderr = (process.stderr or "").strip()
+            stdout = (process.stdout or "").strip()
+            raise ServiceError(stderr or stdout or "failed to export onnx")
+
+        self.repo.add_event(
+            trial.experiment_id,
+            "TRIAL_ONNX_EXPORTED",
+            {
+                "trial_id": trial_id,
+                "model_name": normalized_model_name,
+                "weight_path": str(weight_path),
+                "output_path": str(output_path),
+                "python_executable": python_executable,
+            },
+            trial_id,
+        )
+        return {
+            "trial_id": trial_id,
+            "status": "exported",
+            "output_path": str(output_path),
+            "output_filename": output_filename,
+            "weight_path": str(weight_path),
+            "python_executable": python_executable,
+            "imgsz": imgsz,
+            "task_type": config.task_type,
+        }
+
+    def validate_trial_preview(
+        self,
+        trial_id: str,
+        *,
+        image_limit: int = 50,
+        conf: float = 0.25,
+    ) -> dict[str, Any]:
+        trial = self.repo.get_trial(trial_id)
+        config = self.repo.get_experiment(trial.experiment_id)
+        run_dir = Path(trial.run_dir)
+        if not run_dir.exists():
+            raise ServiceError(f"trial run_dir not found: {trial.run_dir}")
+        weight_path = _trial_weight_path(trial.run_dir)
+        normalized_limit = int(image_limit)
+        if normalized_limit < 1 or normalized_limit > 500:
+            raise ServiceError("image_limit must be between 1 and 500")
+        normalized_conf = float(conf)
+        if normalized_conf < 0.001 or normalized_conf > 1.0:
+            raise ServiceError("conf must be between 0.001 and 1.0")
+
+        validation_id = _safe_validation_id()
+        output_dir = ensure_dir(run_dir / ".validation_previews" / validation_id)
+        request_path = output_dir / ".validation_request.json"
+        stdout_log = output_dir / "stdout.log"
+        stderr_log = output_dir / "stderr.log"
+        imgsz = int(trial.params.get("imgsz", config.initial_params.get("imgsz", 640)))
+        batch = int(trial.params.get("batch", config.initial_params.get("batch", 16)))
+        write_json(
+            request_path,
+            {
+                "trial_id": trial_id,
+                "validation_id": validation_id,
+                "task_type": config.task_type,
+                "dataset_yaml": config.dataset_yaml,
+                "model_path": str(weight_path),
+                "output_dir": str(output_dir),
+                "image_limit": normalized_limit,
+                "conf": normalized_conf,
+                "imgsz": imgsz,
+                "batch": batch,
+            },
+        )
+
+        python_executable = _python_for_yolo()
+        env = dict(os.environ)
+        src_root = str(Path(__file__).resolve().parent.parent)
+        env["PYTHONPATH"] = src_root if not env.get("PYTHONPATH") else f"{src_root}{os.pathsep}{env['PYTHONPATH']}"
+        completed = subprocess.run(
+            [python_executable, "-m", "openclaw_yolo.core.validation_worker", str(request_path)],
+            capture_output=True,
+            text=True,
+            cwd=str(run_dir),
+            check=False,
+            env=env,
+        )
+        stdout_log.write_text(completed.stdout or "", encoding="utf-8")
+        stderr_log.write_text(completed.stderr or "", encoding="utf-8")
+        if completed.returncode != 0:
+            message = (completed.stderr or completed.stdout or "failed to run validation preview").strip()
+            raise ServiceError(message.splitlines()[-1] if message else "failed to run validation preview")
+        try:
+            worker_result = json.loads((completed.stdout or "").strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError) as exc:
+            raise ServiceError("validation worker did not return valid JSON") from exc
+
+        return {
+            "trial_id": trial_id,
+            "display_name": trial.display_name,
+            "validation_id": validation_id,
+            "split": "val",
+            "conf": normalized_conf,
+            "image_limit": normalized_limit,
+            "imgsz": imgsz,
+            "batch": batch,
+            "weight_path": str(weight_path),
+            "metrics": worker_result.get("metrics", {}),
+            "images": worker_result.get("images", []),
+            "stdout_log": str(stdout_log),
+            "stderr_log": str(stderr_log),
+        }
 
     def continue_experiment(
         self,
@@ -1176,8 +1518,10 @@ class OrchestratorService:
 
         trials = self.repo.list_trials(experiment_id)
         iteration = self._next_iteration(trials)
-        trial_id = self._next_named_trial_id(experiment_id, trial_model, trial_params)
-        trial_dir = ensure_dir(Path(config.save_root) / "experiments" / experiment_id / trial_id)
+        display_name = self._next_trial_display_name(experiment_id, trial_model, trial_params)
+        trial_id = self.repo.next_trial_id()
+        trial_dir = ensure_dir(Path(config.save_root) / "experiments" / experiment_id / display_name)
+        dataset_analysis = analyze_dataset(config.dataset_yaml)
         previous_summary = None
         summaries = self.repo.recent_summaries(experiment_id, limit=1)
         if summaries:
@@ -1195,6 +1539,7 @@ class OrchestratorService:
         next_status = self._completion_status(config, summary, len(self.repo.list_trials(experiment_id)) + 1)
         trial = TrialRecord(
             trial_id=trial_id,
+            display_name=display_name,
             experiment_id=experiment_id,
             iteration=iteration,
             params=trial_params,
@@ -1207,6 +1552,7 @@ class OrchestratorService:
             model=trial_model,
             model_source=model_source,
             params_source=params_source,
+            dataset_analysis=dataset_analysis,
         )
         self.repo.create_trial(trial)
         self.repo.update_experiment_status(experiment_id, next_status)
@@ -1215,6 +1561,7 @@ class OrchestratorService:
             "TRIAL_IMPORTED",
             {
                 "trial_id": trial_id,
+                "display_name": display_name,
                 "run_dir": trial.run_dir,
                 "summary_path": str(summary_path),
                 "note": trial.note,
@@ -1224,6 +1571,7 @@ class OrchestratorService:
         return {
             "status": next_status,
             "trial_id": trial_id,
+            "display_name": display_name,
             "run_dir": trial.run_dir,
             "summary_path": str(summary_path),
             "final_metrics": summary["final_metrics"],
@@ -1257,12 +1605,15 @@ class OrchestratorService:
         params_source = "remote_args_yaml" if set(parsed_params) >= set(SEARCH_SPACE) else "remote_args_yaml_partial"
         trial_model = str(args_data["model"])
         trials = self.repo.list_trials(experiment_id)
-        trial_id = self._next_named_trial_id(experiment_id, trial_model, trial_params)
+        display_name = self._next_trial_display_name(experiment_id, trial_model, trial_params)
+        trial_id = self.repo.next_trial_id()
         iteration = self._next_iteration(trials)
-        cache_dir = ensure_dir(Path(config.save_root) / "experiments" / experiment_id / trial_id)
+        cache_dir = ensure_dir(Path(config.save_root) / "experiments" / experiment_id / display_name)
+        dataset_analysis = analyze_dataset(config.dataset_yaml)
         write_json(cache_dir / TRIAL_CONFIG_FILENAME, trial_params)
         trial = TrialRecord(
             trial_id=trial_id,
+            display_name=display_name,
             experiment_id=experiment_id,
             iteration=iteration,
             params=trial_params,
@@ -1277,6 +1628,7 @@ class OrchestratorService:
             remote_run_dir=remote_run_dir,
             sync_status=REMOTE_SYNC_PENDING,
             remote_training_status=REMOTE_TRAINING_UNKNOWN,
+            dataset_analysis=dataset_analysis,
         )
         self.repo.create_trial(trial)
         self.repo.update_experiment_status(experiment_id, STATE_TRAINING)
@@ -1285,6 +1637,7 @@ class OrchestratorService:
             "REMOTE_TRIAL_REGISTERED",
             {
                 "trial_id": trial_id,
+                "display_name": display_name,
                 "remote_server_id": remote_server_id,
                 "remote_run_dir": remote_run_dir,
                 "model": trial_model,
@@ -1295,6 +1648,7 @@ class OrchestratorService:
         return {
             "status": trial.status,
             "trial_id": trial_id,
+            "display_name": display_name,
             "remote_server_id": remote_server_id,
             "remote_run_dir": remote_run_dir,
             "local_run_dir": str(cache_dir),
@@ -1541,6 +1895,37 @@ class OrchestratorService:
                 return candidate
             index += 1
 
+    def _next_trial_display_name(
+        self,
+        experiment_id: str,
+        model: str,
+        params: dict[str, Any],
+    ) -> str:
+        model_stem = _model_stem(model)
+        imgsz = int(params.get("imgsz") or 0)
+        prefix = f"{model_stem}_{imgsz}"
+        trials = self.repo.list_trials(experiment_id)
+        max_index = 0
+        for trial in trials:
+            if not trial.display_name.startswith(f"{prefix}_"):
+                continue
+            try:
+                max_index = max(max_index, int(trial.display_name.rsplit("_", 1)[1]))
+            except (ValueError, IndexError):
+                continue
+        index = max_index + 1
+        while True:
+            candidate = f"{prefix}_{index}"
+            if not self.repo.trial_display_name_exists(experiment_id, candidate):
+                return candidate
+            index += 1
+
+    def _validate_trial_display_name(self, display_name: str) -> str:
+        normalized = str(display_name or "").strip()
+        if not normalized:
+            raise ServiceError("trial name cannot be empty")
+        return normalized
+
     def _previous_summary_for_trial(
         self,
         experiment_id: str,
@@ -1699,6 +2084,7 @@ class OrchestratorService:
         return {
             "iteration": trial.iteration,
             "trial_id": trial.trial_id,
+            "display_name": trial.display_name,
             "status": trial.status,
             "source": trial.source,
             "model": trial.model,
@@ -1756,7 +2142,8 @@ class OrchestratorService:
         try:
             session_id = _resolve_session_id(config.session_key)
             compact_summary = _notification_summary(summary)
-            message = _build_notify_message(config, trial_id, compact_summary)
+            trial = self.repo.get_trial(trial_id)
+            message = _build_notify_message(config, trial.display_name, compact_summary)
             _notify_openclaw_session(session_id, message)
             self.repo.add_event(
                 config.experiment_id,
@@ -1803,6 +2190,7 @@ class OrchestratorService:
     def get_experiment_curves(self, experiment_id: str) -> dict[str, Any]:
         trials = self.repo.list_trials(experiment_id)
         curves = {}
+        trial_labels = {}
         for trial in trials:
             results_csv = Path(trial.run_dir) / "results.csv"
             if not results_csv.exists():
@@ -1825,8 +2213,9 @@ class OrchestratorService:
                     if "epoch" in cleaned_row:
                         trial_data.append(cleaned_row)
             curves[trial.trial_id] = trial_data
-            
-        return {"experiment_id": experiment_id, "curves": curves}
+            trial_labels[trial.trial_id] = trial.display_name
+
+        return {"experiment_id": experiment_id, "curves": curves, "trial_labels": trial_labels}
 
     def get_trial_visualizations(self, trial_id: str) -> dict[str, Any]:
         trial = self.repo.get_trial(trial_id)
@@ -1843,6 +2232,21 @@ class OrchestratorService:
         run_dir_resolved = Path(trial.run_dir).resolve()
         file_path = (run_dir_resolved / filename).resolve()
         if not file_path.is_relative_to(run_dir_resolved):
+            raise ServiceError("invalid filename")
+        if not file_path.exists() or not file_path.is_file():
+            raise ServiceError("file not found")
+        return str(file_path)
+
+    def get_validation_preview_file_path(self, trial_id: str, validation_id: str, filename: str) -> str:
+        trial = self.repo.get_trial(trial_id)
+        normalized_validation_id = _validate_preview_filename(validation_id)
+        normalized_filename = _validate_preview_filename(filename)
+        run_dir_resolved = Path(trial.run_dir).resolve()
+        preview_dir = (run_dir_resolved / ".validation_previews" / normalized_validation_id).resolve()
+        if not preview_dir.is_relative_to(run_dir_resolved):
+            raise ServiceError("invalid validation id")
+        file_path = (preview_dir / normalized_filename).resolve()
+        if not file_path.is_relative_to(preview_dir):
             raise ServiceError("invalid filename")
         if not file_path.exists() or not file_path.is_file():
             raise ServiceError("file not found")

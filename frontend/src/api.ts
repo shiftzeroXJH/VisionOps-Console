@@ -6,6 +6,7 @@ export type MetricGoal = {
 export type Experiment = {
   experiment_id: string;
   description: string;
+  project: string;
   status: string;
   task_type: string;
   dataset_root: string;
@@ -35,6 +36,14 @@ async function safeThrowError(res: Response): Promise<never> {
 export const api = {
   async getExperiments(): Promise<{ experiments: Experiment[] }> {
     const res = await fetch('/api/experiments');
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async clearValidationCache() {
+    const res = await fetch('/api/settings/clear-validation-cache', {
+      method: 'POST'
+    });
     if (!res.ok) await safeThrowError(res);
     return res.json();
   },
@@ -79,7 +88,7 @@ export const api = {
     return res.json();
   },
 
-  async updateExperiment(experimentId: string, payload: { description: string }) {
+  async updateExperiment(experimentId: string, payload: { description?: string; project?: string }) {
     const res = await fetch(`/api/experiments/${experimentId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -149,6 +158,26 @@ export const api = {
     return res.json();
   },
 
+  async exportTrialOnnx(trialId: string, payload: { model_name: string; output_dir: string }) {
+    const res = await fetch(`/api/trials/${trialId}/export-onnx`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async validateTrialPreview(trialId: string, payload: { image_limit: number; conf: number }) {
+    const res = await fetch(`/api/trials/${trialId}/validate-preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
   async importTrial(experimentId: string, payload: any) {
     const res = await fetch(`/api/experiments/${experimentId}/trials/import`, {
       method: 'POST',
@@ -167,6 +196,16 @@ export const api = {
 
   async getTrialSummary(trialId: string) {
     const res = await fetch(`/api/trials/${trialId}/summary`);
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async renameTrial(trialId: string, payload: { display_name: string }) {
+    const res = await fetch(`/api/trials/${trialId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
     if (!res.ok) await safeThrowError(res);
     return res.json();
   },

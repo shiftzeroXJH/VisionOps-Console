@@ -312,11 +312,111 @@ body,
 }
 
 /* Sidebar experiments */
+.experiment-list-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem 0.5rem 1rem;
+}
+
+.experiment-search {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.72);
+  padding: 0.45rem 0.6rem;
+  color: var(--text-muted);
+}
+
+.experiment-search input {
+  width: 100%;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-main);
+  font-size: 0.8rem;
+}
+
+.experiment-search input::placeholder {
+  color: var(--text-muted);
+}
+
 .experiment-list {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  padding: 1rem 0.5rem;
+}
+
+.experiment-project-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.experiment-project-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.25rem 0.35rem;
+}
+
+.experiment-project-chevron,
+.experiment-project-name {
+  border: none;
+  background: transparent;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.experiment-project-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.experiment-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  padding: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.experiment-project-editor {
+  display: grid;
+  grid-column: 2 / -1;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.experiment-project-editor .input {
+  height: 1.85rem;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.82rem;
+}
+
+.experiment-project-action {
+  flex: 0 0 auto;
+  padding: 0.15rem 0.25rem;
+  min-height: 0;
+}
+
+.experiment-project-count {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 
 .experiment-card {
@@ -629,4 +729,243 @@ tr:hover td {
 
 .table-wrapper {
   background: linear-gradient(to bottom, rgba(255,255,255,0.6), rgba(255,255,255,0.3));
+}
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.dialog-card {
+  width: 520px;
+  max-width: calc(100vw - 2rem);
+}
+
+.settings-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.settings-header h2 {
+  font-size: 1.2rem;
+}
+
+.settings-kicker {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.settings-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: rgba(255,255,255,0.5);
+}
+
+.settings-section h3 {
+  font-size: 1rem;
+  margin-bottom: 0.25rem;
+}
+
+.settings-result {
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--text-main);
+  font-size: 0.875rem;
+}
+
+.validation-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(7, 12, 24, 0.72);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+}
+
+.validation-dialog {
+  width: min(1560px, 98vw);
+  height: min(920px, 96vh);
+  background: linear-gradient(135deg, rgba(248,250,252,0.96), rgba(226,232,240,0.92));
+  border: 1px solid rgba(255,255,255,0.8);
+  border-radius: 18px;
+  box-shadow: 0 28px 80px rgba(0,0,0,0.35);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.validation-header,
+.validation-toolbar,
+.validation-zoombar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.validation-header {
+  justify-content: space-between;
+}
+
+.validation-header h2 {
+  font-size: 1.15rem;
+}
+
+.validation-kicker {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.validation-toolbar {
+  flex-wrap: wrap;
+}
+
+.validation-toolbar label {
+  display: grid;
+  gap: 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.validation-toolbar .input {
+  width: 110px;
+}
+
+.validation-metrics {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--panel-border);
+  flex-wrap: wrap;
+}
+
+.validation-metric-card {
+  min-width: 120px;
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.68);
+  border: 1px solid var(--panel-border);
+}
+
+.validation-metric-card span,
+.validation-metric-note {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.validation-metric-card strong {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 1.05rem;
+  color: var(--text-main);
+}
+
+.validation-metric-note {
+  align-self: center;
+  margin-left: auto;
+}
+
+.validation-zoombar {
+  padding-top: 0.55rem;
+  padding-bottom: 0.55rem;
+}
+
+.validation-viewer {
+  flex: 1;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(59,130,246,0.18), transparent 28%),
+    linear-gradient(135deg, #0f172a, #020617);
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.validation-current-caption {
+  color: rgba(226,232,240,0.9);
+  font-size: 0.78rem;
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid rgba(148,163,184,0.25);
+  word-break: break-all;
+}
+
+.validation-pair-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  background: rgba(148,163,184,0.35);
+}
+
+.validation-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: rgba(2,6,23,0.88);
+}
+
+.validation-pane-title {
+  padding: 0.5rem 0.75rem;
+  color: rgba(248,250,252,0.95);
+  font-weight: 700;
+  border-bottom: 1px solid rgba(148,163,184,0.25);
+}
+
+.validation-pane-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  position: relative;
+}
+
+.validation-pane-viewport:active {
+  cursor: grabbing;
+}
+
+.validation-pane-viewport img {
+  display: block;
+  max-width: none;
+  transform-origin: top left;
+  user-select: none;
+}
+
+.validation-empty {
+  margin: auto;
+  color: rgba(226,232,240,0.9);
+  font-weight: 700;
 }

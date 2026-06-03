@@ -181,16 +181,6 @@ def build_summary(
     profile = TASK_METRIC_PROFILES.get(task_type, TASK_METRIC_PROFILES["detection"])
     primary_component = profile["primary_component"]
     component_specs = profile["components"]
-    last_row = rows[-1]
-    metric_breakdown_raw = {
-        component: _extract_metric_set(last_row, spec["metric_suffixes"])
-        for component, spec in component_specs.items()
-    }
-    available_components = [
-        component
-        for component, metrics in metric_breakdown_raw.items()
-        if any(value is not None for value in metrics.values())
-    ]
     primary_spec = component_specs[primary_component]
     primary_metric_names = _metric_column_names("mAP50-95", primary_spec["metric_suffixes"])
     best_map = max((_column_value(row, primary_metric_names) or 0.0 for row in rows), default=0.0)
@@ -202,6 +192,16 @@ def build_summary(
         ),
         len(rows),
     )
+    best_row = rows[best_epoch - 1]
+    metric_breakdown_raw = {
+        component: _extract_metric_set(best_row, spec["metric_suffixes"])
+        for component, spec in component_specs.items()
+    }
+    available_components = [
+        component
+        for component, metrics in metric_breakdown_raw.items()
+        if any(value is not None for value in metrics.values())
+    ]
     primary_metrics = metric_breakdown_raw[primary_component]
     metric_breakdown = {
         component: _normalize_metric_set(metrics)
@@ -210,8 +210,8 @@ def build_summary(
     }
     plateau, plateau_epoch = _plateau(rows, primary_spec["metric_suffixes"])
     overfitting = _detect_overfitting(rows, primary_spec["train_loss"], primary_spec["metric_suffixes"])
-    epoch_time = _column_value(last_row, ("time", "epoch_time"))
-    gpu_mem = _column_value(last_row, ("gpu_mem",))
+    epoch_time = _column_value(best_row, ("time", "epoch_time"))
+    gpu_mem = _column_value(best_row, ("gpu_mem",))
     warnings: list[str] = []
     if gpu_mem and gpu_mem > 10_240:
         warnings.append("gpu_memory_high")

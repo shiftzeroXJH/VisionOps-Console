@@ -18,6 +18,7 @@ YOLO_BASELINE: dict[str, Any] = {
     "mosaic": 0.0,
     "mixup": 0.0,
     "copy_paste": 0.0,
+    "erasing": 0.0,
     "degrees": 2.0,
     "translate": 0.03,
     "scale": 0.10,
@@ -37,8 +38,8 @@ TASK_BASELINES: dict[str, dict[str, Any]] = {
 }
 
 SEARCH_SPACE: dict[str, dict[str, Any]] = {
-    "imgsz": {"type": "int", "min": 224, "max": 1536, "step": 32},
-    "batch": {"type": "choice", "values": [4, 8, 16, 32]},
+    "imgsz": {"type": "int", "min": 160, "max": 2560, "step": 32},
+    "batch": {"type": "choice", "values": [2, 4, 8, 16, 32]},
     "workers": {"type": "choice", "values": [0, 1, 2, 4]},
     "epochs": {"type": "int", "min": 1, "max": 1000},
     "patience": {"type": "int", "min": 0, "max": 300},
@@ -52,6 +53,7 @@ SEARCH_SPACE: dict[str, dict[str, Any]] = {
     "mosaic": {"type": "float", "min": 0.0, "max": 1.0},
     "mixup": {"type": "float", "min": 0.0, "max": 1.0},
     "copy_paste": {"type": "float", "min": 0.0, "max": 1.0},
+    "erasing": {"type": "float", "min": 0.0, "max": 1.0},
     "degrees": {"type": "float", "min": 0.0, "max": 45.0},
     "translate": {"type": "float", "min": 0.0, "max": 0.5},
     "scale": {"type": "float", "min": 0.0, "max": 1.0},

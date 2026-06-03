@@ -37,6 +37,7 @@ export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
   }
 
   const trialIds = useMemo(() => Object.keys(data?.curves || {}).sort(), [data])
+  const trialLabels = useMemo(() => data?.trial_labels || {}, [data])
 
   const colorMap = useMemo(() => {
     const map = new Map<string, string>()
@@ -96,7 +97,7 @@ export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
             {trialIds.map((trialId) => (
               <label key={trialId} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem', marginBottom: '0.5rem' }}>
                 <input type="checkbox" checked={selectedTrials.has(trialId)} onChange={() => toggleTrial(trialId)} />
-                <span style={{ color: selectedTrials.has(trialId) ? colorMap.get(trialId) : 'var(--text-muted)' }}>{trialId}</span>
+                <span style={{ color: selectedTrials.has(trialId) ? colorMap.get(trialId) : 'var(--text-muted)' }}>{trialLabels[trialId] || trialId}</span>
               </label>
             ))}
           </div>
@@ -123,7 +124,7 @@ export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
                         <Tooltip />
                         <Legend />
                         {trialIds.filter((trialId) => selectedTrials.has(trialId)).map((trialId) => (
-                          <Line key={trialId} type="monotone" dataKey={`${trialId}.${metric.key}`} name={trialId} stroke={colorMap.get(trialId)} strokeWidth={2} dot={false} connectNulls />
+                          <Line key={trialId} type="monotone" dataKey={`${trialId}.${metric.key}`} name={trialLabels[trialId] || trialId} stroke={colorMap.get(trialId)} strokeWidth={2} dot={false} connectNulls />
                         ))}
                       </LineChart>
                     </ResponsiveContainer>

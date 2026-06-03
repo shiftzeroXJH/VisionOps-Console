@@ -38,7 +38,7 @@ const PARAM_GROUPS: ParamGroup[] = [
     id: 'appearance',
     title: '颜色与拼接增强',
     description: '颜色扰动和拼接增强，默认保持偏保守。',
-    keys: ['hsv_h', 'hsv_s', 'hsv_v', 'mosaic', 'mixup', 'copy_paste'],
+    keys: ['hsv_h', 'hsv_s', 'hsv_v', 'mosaic', 'mixup', 'copy_paste', 'erasing'],
   },
 ]
 
@@ -55,19 +55,20 @@ const PARAM_LABELS: Record<string, string> = {
   weight_decay: 'weight_decay',
   warmup_epochs: 'warmup_epochs',
   cos_lr: 'cos_lr',
-  degrees: 'degrees',
-  translate: 'translate',
-  scale: 'scale',
-  shear: 'shear',
-  perspective: 'perspective',
-  flipud: 'flipud',
-  fliplr: 'fliplr',
-  hsv_h: 'hsv_h',
-  hsv_s: 'hsv_s',
-  hsv_v: 'hsv_v',
-  mosaic: 'mosaic',
-  mixup: 'mixup',
-  copy_paste: 'copy_paste',
+  degrees: 'degrees（旋转角度）',
+  translate: 'translate（平移比例）',
+  scale: 'scale（缩放幅度）',
+  shear: 'shear（错切幅度）',
+  perspective: 'perspective（透视变换）',
+  flipud: 'flipud（上下翻转）',
+  fliplr: 'fliplr（左右翻转）',
+  hsv_h: 'hsv_h（色相扰动）',
+  hsv_s: 'hsv_s（饱和度扰动）',
+  hsv_v: 'hsv_v（明度扰动）',
+  mosaic: 'mosaic（马赛克增强）',
+  mixup: 'mixup（样本混合）',
+  copy_paste: 'copy_paste（复制粘贴增强）',
+  erasing: 'erasing（随机擦除）',
 }
 
 const DEFAULT_EXPANDED: Record<string, boolean> = {
@@ -269,7 +270,7 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
         <div className="flex gap-2">
           {onClose && <button className="btn flex-1" onClick={onClose} disabled={validating || loading}>关闭</button>}
           <button className="btn btn-primary flex-1" onClick={handleRun} disabled={loading || validating}>
-            {loading ? '正在启动...' : '开始训练 (自动校验)'}
+            {loading ? '正在启动...' : '开始训练（自动校验）'}
           </button>
         </div>
       </div>

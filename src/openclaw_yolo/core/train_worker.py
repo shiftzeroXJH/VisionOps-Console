@@ -58,6 +58,7 @@ def _train(request: dict[str, Any]) -> None:
         mosaic=float(params["mosaic"]),
         mixup=float(params["mixup"]),
         copy_paste=float(params["copy_paste"]),
+        erasing=float(params["erasing"]),
         degrees=float(params["degrees"]),
         translate=float(params["translate"]),
         scale=float(params["scale"]),

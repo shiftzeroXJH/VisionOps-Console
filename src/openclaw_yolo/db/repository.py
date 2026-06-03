@@ -9,6 +9,14 @@ from openclaw_yolo.models import ExperimentConfig, GoalConfig, RemoteServer, Tri
 from openclaw_yolo.utils import utc_now_iso
 
 
+DEFAULT_PROJECT_NAME = "未分组"
+
+
+def default_project_name(description: str) -> str:
+    normalized = str(description or "").strip()
+    return normalized[:2] if normalized else DEFAULT_PROJECT_NAME
+
+
 class Repository:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = str(db_path)
@@ -47,6 +55,7 @@ class Repository:
                 CREATE TABLE IF NOT EXISTS experiments (
                     experiment_id TEXT PRIMARY KEY,
                     description TEXT NOT NULL DEFAULT '',
+                    project TEXT NOT NULL DEFAULT '',
                     session_key TEXT NOT NULL DEFAULT '',
                     task_type TEXT NOT NULL,
                     dataset_root TEXT NOT NULL,
@@ -65,10 +74,12 @@ class Repository:
 
                 CREATE TABLE IF NOT EXISTS trials (
                     trial_id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL DEFAULT '',
                     experiment_id TEXT NOT NULL,
                     iteration INTEGER NOT NULL,
                     params_json TEXT NOT NULL,
                     metrics_json TEXT NOT NULL,
+                    dataset_analysis_json TEXT NOT NULL DEFAULT '{}',
                     run_dir TEXT NOT NULL,
                     summary_path TEXT,
                     status TEXT NOT NULL,
@@ -121,12 +132,27 @@ class Repository:
             }
             if "description" not in columns:
                 conn.execute("ALTER TABLE experiments ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+            if "project" not in columns:
+                conn.execute("ALTER TABLE experiments ADD COLUMN project TEXT NOT NULL DEFAULT ''")
             if "session_key" not in columns:
                 conn.execute("ALTER TABLE experiments ADD COLUMN session_key TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                """
+                UPDATE experiments
+                SET project = CASE
+                    WHEN TRIM(description) = '' THEN ?
+                    ELSE SUBSTR(TRIM(description), 1, 2)
+                END
+                WHERE TRIM(COALESCE(project, '')) = ''
+                """,
+                (DEFAULT_PROJECT_NAME,),
+            )
             trial_columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(trials)").fetchall()
             }
+            if "display_name" not in trial_columns:
+                conn.execute("ALTER TABLE trials ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
             if "source" not in trial_columns:
                 conn.execute("ALTER TABLE trials ADD COLUMN source TEXT NOT NULL DEFAULT 'trained'")
             if "note" not in trial_columns:
@@ -134,6 +160,7 @@ class Repository:
             if "reason" not in trial_columns:
                 conn.execute("ALTER TABLE trials ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
             trial_defaults = {
+                "dataset_analysis_json": "TEXT NOT NULL DEFAULT '{}'",
                 "model": "TEXT NOT NULL DEFAULT ''",
                 "model_source": "TEXT NOT NULL DEFAULT 'experiment_default'",
                 "params_source": "TEXT NOT NULL DEFAULT 'manual'",
@@ -182,19 +209,37 @@ class Repository:
             ).fetchone()
         return row is not None
 
+    def trial_display_name_exists(
+        self,
+        experiment_id: str,
+        display_name: str,
+        *,
+        exclude_trial_id: str | None = None,
+    ) -> bool:
+        query = "SELECT 1 FROM trials WHERE experiment_id = ? AND display_name = ?"
+        params: list[Any] = [experiment_id, display_name]
+        if exclude_trial_id is not None:
+            query += " AND trial_id != ?"
+            params.append(exclude_trial_id)
+        query += " LIMIT 1"
+        with self._connect() as conn:
+            row = conn.execute(query, params).fetchone()
+        return row is not None
+
     def create_experiment(self, config: ExperimentConfig) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO experiments (
-                    experiment_id, description, session_key, task_type, dataset_root, dataset_yaml, pretrained_model,
+                    experiment_id, description, project, session_key, task_type, dataset_root, dataset_yaml, pretrained_model,
                     save_root, goal_config, status, auto_iterate, confirm_timeout,
                     initial_params, search_space, stop_conditions, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     config.experiment_id,
                     config.description,
+                    config.project,
                     config.session_key,
                     config.task_type,
                     config.dataset_root,
@@ -223,6 +268,7 @@ class Repository:
         return ExperimentConfig(
             experiment_id=row["experiment_id"],
             description=row["description"],
+            project=row["project"] or default_project_name(row["description"]),
             session_key=row["session_key"],
             task_type=row["task_type"],
             dataset_root=row["dataset_root"],
@@ -245,14 +291,28 @@ class Repository:
                 (status, experiment_id),
             )
 
-    def update_experiment_description(self, experiment_id: str, description: str) -> None:
+    def update_experiment(self, experiment_id: str, *, description: str | None = None, project: str | None = None) -> None:
+        assignments: list[str] = []
+        values: list[Any] = []
+        if description is not None:
+            assignments.append("description = ?")
+            values.append(description)
+        if project is not None:
+            assignments.append("project = ?")
+            values.append(project)
+        if not assignments:
+            return
+        values.append(experiment_id)
         with self._connect() as conn:
             cursor = conn.execute(
-                "UPDATE experiments SET description = ? WHERE experiment_id = ?",
-                (description, experiment_id),
+                f"UPDATE experiments SET {', '.join(assignments)} WHERE experiment_id = ?",
+                values,
             )
             if cursor.rowcount == 0:
                 raise KeyError(f"experiment not found: {experiment_id}")
+
+    def update_experiment_description(self, experiment_id: str, description: str) -> None:
+        self.update_experiment(experiment_id, description=description)
 
     def delete_experiment(self, experiment_id: str) -> None:
         with self._connect() as conn:
@@ -267,6 +327,7 @@ class Repository:
             ExperimentConfig(
                 experiment_id=row["experiment_id"],
                 description=row["description"],
+                project=row["project"] or default_project_name(row["description"]),
                 session_key=row["session_key"],
                 task_type=row["task_type"],
                 dataset_root=row["dataset_root"],
@@ -302,6 +363,7 @@ class Repository:
             ExperimentConfig(
                 experiment_id=row["experiment_id"],
                 description=row["description"],
+                project=row["project"] or default_project_name(row["description"]),
                 session_key=row["session_key"],
                 task_type=row["task_type"],
                 dataset_root=row["dataset_root"],
@@ -324,19 +386,21 @@ class Repository:
             conn.execute(
                 """
                 INSERT INTO trials (
-                    trial_id, experiment_id, iteration, params_json, metrics_json, run_dir,
+                    trial_id, display_name, experiment_id, iteration, params_json, metrics_json, dataset_analysis_json, run_dir,
                     summary_path, status, source, note, reason, model, model_source,
                     params_source, remote_server_id, remote_run_dir, sync_status, sync_error,
                     remote_training_status, last_remote_csv_size, last_remote_csv_mtime,
                     last_synced_epoch_count, unchanged_sync_count, last_synced_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     trial.trial_id,
+                    trial.display_name,
                     trial.experiment_id,
                     trial.iteration,
                     json.dumps(trial.params),
                     json.dumps(trial.metrics),
+                    json.dumps(trial.dataset_analysis),
                     trial.run_dir,
                     trial.summary_path,
                     trial.status,
@@ -364,8 +428,10 @@ class Repository:
         self,
         trial_id: str,
         *,
+        display_name: str | None = None,
         status: str | None = None,
         metrics: dict[str, Any] | None = None,
+        dataset_analysis: dict[str, Any] | None = None,
         summary_path: str | None = None,
         run_dir: str | None = None,
         model: str | None = None,
@@ -382,12 +448,18 @@ class Repository:
     ) -> None:
         assignments: list[str] = []
         values: list[Any] = []
+        if display_name is not None:
+            assignments.append("display_name = ?")
+            values.append(display_name)
         if status is not None:
             assignments.append("status = ?")
             values.append(status)
         if metrics is not None:
             assignments.append("metrics_json = ?")
             values.append(json.dumps(metrics))
+        if dataset_analysis is not None:
+            assignments.append("dataset_analysis_json = ?")
+            values.append(json.dumps(dataset_analysis))
         if summary_path is not None:
             assignments.append("summary_path = ?")
             values.append(summary_path)
@@ -428,6 +500,7 @@ class Repository:
             raise KeyError(f"trial not found: {trial_id}")
         return TrialRecord(
             trial_id=row["trial_id"],
+            display_name=row["display_name"] or row["trial_id"],
             experiment_id=row["experiment_id"],
             iteration=int(row["iteration"]),
             params=json.loads(row["params_json"]),
@@ -435,6 +508,7 @@ class Repository:
             run_dir=row["run_dir"],
             summary_path=row["summary_path"],
             metrics=json.loads(row["metrics_json"]),
+            dataset_analysis=json.loads(row["dataset_analysis_json"]),
             source=row["source"],
             note=row["note"],
             reason=row["reason"],
@@ -462,6 +536,7 @@ class Repository:
         return [
             TrialRecord(
                 trial_id=row["trial_id"],
+                display_name=row["display_name"] or row["trial_id"],
                 experiment_id=row["experiment_id"],
                 iteration=int(row["iteration"]),
                 params=json.loads(row["params_json"]),
@@ -469,6 +544,7 @@ class Repository:
                 run_dir=row["run_dir"],
                 summary_path=row["summary_path"],
                 metrics=json.loads(row["metrics_json"]),
+                dataset_analysis=json.loads(row["dataset_analysis_json"]),
                 source=row["source"],
                 note=row["note"],
                 reason=row["reason"],
