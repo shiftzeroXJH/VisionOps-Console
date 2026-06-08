@@ -10,10 +10,43 @@ interface Props {
 
 const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316']
 
+type YAxisMode = 'overview' | 'tail'
+
+const getYAxisDomain = (values: number[], mode: YAxisMode): [number, number] | [number, 'auto'] => {
+  if (values.length === 0) return [0, 'auto']
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+
+  if (mode === 'overview') {
+    const pad = Math.max(max * 0.05, 0.01)
+    return [0, max + pad]
+  }
+
+  const range = max - min
+  const pad = range > 0 ? range * 0.08 : Math.max(Math.abs(max) * 0.05, 0.01)
+  return [Math.max(0, min - pad), max + pad]
+}
+
+const formatAxisTick = (value: number | string) => {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return String(value)
+  if (Math.abs(numeric) >= 10) return numeric.toFixed(1).replace(/\.0$/, '')
+  return numeric.toFixed(4).replace(/\.?0+$/, '')
+}
+
+const getChartWindowData = (rows: any[], trialIds: string[], metricKey: string, mode: YAxisMode) => {
+  if (mode === 'overview') return rows
+  const rowsWithVisibleValues = rows.filter((point) =>
+    trialIds.some((trialId) => typeof point[trialId]?.[metricKey] === 'number')
+  )
+  return rowsWithVisibleValues.slice(-Math.max(5, Math.ceil(rowsWithVisibleValues.length * 0.3)))
+}
+
 export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [selectedTrials, setSelectedTrials] = useState<Set<string>>(new Set())
+  const [yAxisMode, setYAxisMode] = useState<YAxisMode>('overview')
 
   useEffect(() => {
     const fetchCurves = async () => {
@@ -64,6 +97,7 @@ export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
 
   const metrics = [
     { key: 'metrics/mAP50-95(B)', label: 'Box mAP50-95' },
+    { key: 'metrics/mAP50(B)', label: 'Box mAP50' },
     { key: 'metrics/recall(B)', label: 'Recall' },
     { key: 'metrics/precision(B)', label: 'Precision' },
     { key: 'train/box_loss', label: 'Train Box Loss' },
@@ -88,7 +122,16 @@ export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
           <h2 style={{ fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Activity className="text-primary" /> 曲线对比
           </h2>
-          <button className="btn" style={{ padding: '0.25rem' }} onClick={onClose}><X size={20} /></button>
+          <div className="flex items-center gap-2">
+            <button
+              className="btn"
+              onClick={() => setYAxisMode((mode) => mode === 'overview' ? 'tail' : 'overview')}
+              title={yAxisMode === 'overview' ? '切换到尾段范围' : '切换到总览范围'}
+            >
+              {yAxisMode === 'overview' ? '尾段' : '总览'}
+            </button>
+            <button className="btn" style={{ padding: '0.25rem' }} onClick={onClose}><X size={20} /></button>
+          </div>
         </div>
 
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -113,14 +156,22 @@ export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
                   trialIds.some((trialId) => selectedTrials.has(trialId) && point[trialId] && typeof point[trialId][metric.key] === 'number')
                 )
                 if (!hasMetric) return null
+                const selectedTrialIds = trialIds.filter((trialId) => selectedTrials.has(trialId))
+                const chartWindowData = getChartWindowData(chartData, selectedTrialIds, metric.key, yAxisMode)
+                const yAxisValues = chartWindowData.flatMap((point: any) =>
+                  selectedTrialIds
+                    .map((trialId) => point[trialId]?.[metric.key])
+                    .filter((value): value is number => typeof value === 'number')
+                )
+                const yAxisDomain = getYAxisDomain(yAxisValues, yAxisMode)
                 return (
                   <div key={metric.key} style={{ minHeight: 420, border: '1px solid var(--panel-border)', borderRadius: 8, padding: '1rem' }}>
                     <h3 style={{ fontSize: '1rem', fontWeight: 600, textAlign: 'center' }}>{metric.label}</h3>
                     <ResponsiveContainer width="100%" height="90%">
-                      <LineChart data={chartData}>
+                      <LineChart data={chartWindowData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.25)" />
                         <XAxis dataKey="epoch" />
-                        <YAxis domain={['auto', 'auto']} />
+                        <YAxis domain={yAxisDomain} tickFormatter={formatAxisTick} width={56} allowDataOverflow={yAxisMode === 'tail'} />
                         <Tooltip />
                         <Legend />
                         {trialIds.filter((trialId) => selectedTrials.has(trialId)).map((trialId) => (

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+import sqlite3
 
 from backend.core.dataset import analyze_dataset
+from backend.constants import SEARCH_SPACE, STATE_READY, STOP_CONDITIONS
+from backend.db.repository import Repository
 from backend.service import OrchestratorService
-from backend.models import TrialRecord
+from backend.models import ExperimentConfig, GoalConfig, TrialRecord
 
 
 def _write_file(path: Path, content: str = "") -> None:
@@ -595,4 +598,95 @@ def test_default_db_migrates_old_openclaw_filename(tmp_path: Path, monkeypatch) 
     new_db = tmp_path / "yolo_state.sqlite"
     assert new_db.read_bytes() == b"legacy db"
     assert service.repo.db_path == str(new_db.resolve())
+
+
+def test_repository_rebuilds_legacy_experiment_schema(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.sqlite"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE experiments (
+                experiment_id TEXT PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                project TEXT NOT NULL DEFAULT '',
+                session_key TEXT NOT NULL DEFAULT '',
+                task_type TEXT NOT NULL,
+                dataset_root TEXT NOT NULL,
+                dataset_yaml TEXT NOT NULL,
+                pretrained_model TEXT NOT NULL,
+                save_root TEXT NOT NULL,
+                goal_config TEXT NOT NULL,
+                status TEXT NOT NULL,
+                auto_iterate INTEGER NOT NULL,
+                confirm_timeout INTEGER NOT NULL,
+                initial_params TEXT NOT NULL,
+                search_space TEXT NOT NULL,
+                stop_conditions TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+
+    repo = Repository(db_path)
+    columns = {row[1] for row in sqlite3.connect(db_path).execute("PRAGMA table_info(experiments)").fetchall()}
+    assert "auto_iterate" not in columns
+    assert "confirm_timeout" not in columns
+    assert "session_key" not in columns
+
+    repo.create_experiment(
+        ExperimentConfig(
+            experiment_id="exp_legacy_schema",
+            description="legacy schema",
+            project="le",
+            task_type="detection",
+            dataset_root=str(tmp_path),
+            dataset_yaml=str(tmp_path / "data.yaml"),
+            pretrained_model="yolo11n.pt",
+            save_root=str(tmp_path / "runs"),
+            goal=GoalConfig(metric="map50_95", target=0.5),
+            status=STATE_READY,
+            initial_params={"imgsz": 640},
+            search_space=SEARCH_SPACE,
+            stop_conditions=STOP_CONDITIONS,
+        )
+    )
+    assert repo.get_experiment("exp_legacy_schema").description == "legacy schema"
+
+
+def test_run_trial_uses_yolo_python_for_training_worker(tmp_path: Path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset_train_python"
+    _write_file(
+        dataset_root / "data.yaml",
+        "\n".join(
+            [
+                f"path: {dataset_root}",
+                "train: images/train",
+                "val: images/val",
+                "names:",
+                "  0: part",
+            ]
+        ),
+    )
+    service = OrchestratorService(db_path=":memory:")
+    experiment_id = _create_experiment(service, tmp_path, dataset_root)
+    captured_kwargs = {}
+
+    def fake_run_training(**kwargs):
+        captured_kwargs.update(kwargs)
+        run_dir = Path(kwargs["run_dir"])
+        _write_results(run_dir, map50_95=0.55)
+        return {
+            "run_dir": str(run_dir),
+            "stdout_log": str(run_dir / "stdout.log"),
+            "stderr_log": str(run_dir / "stderr.log"),
+        }
+
+    monkeypatch.setattr("backend.service._python_for_yolo", lambda: "D:/fake/yolo/python.exe")
+    monkeypatch.setattr("backend.service.run_training", fake_run_training)
+
+    result = service.run_trial(experiment_id)
+
+    assert result["status"] == "WAITING_USER_CONFIRM"
+    assert captured_kwargs["python_executable"] == "D:/fake/yolo/python.exe"
+    assert captured_kwargs["src_root"].endswith("src")
 

@@ -25,6 +25,49 @@ const CANCELLABLE_STATUSES = new Set([
 
 const CHART_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6']
 
+const SUMMARY_METRICS = [
+  { key: 'metrics/mAP50-95(B)', label: 'Box mAP50-95' },
+  { key: 'metrics/mAP50(B)', label: 'Box mAP50' },
+  { key: 'metrics/recall(B)', label: 'Recall' },
+  { key: 'metrics/precision(B)', label: 'Precision' },
+  { key: 'train/box_loss', label: 'Train Box Loss' },
+  { key: 'train/cls_loss', label: 'Train Class Loss' },
+  { key: 'val/box_loss', label: 'Val Box Loss' },
+  { key: 'val/cls_loss', label: 'Val Class Loss' },
+]
+
+type YAxisMode = 'overview' | 'tail'
+
+const getYAxisDomain = (values: number[], mode: YAxisMode): [number, number] | [number, 'auto'] => {
+  if (values.length === 0) return [0, 'auto']
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+
+  if (mode === 'overview') {
+    const pad = Math.max(max * 0.05, 0.01)
+    return [0, max + pad]
+  }
+
+  const range = max - min
+  const pad = range > 0 ? range * 0.08 : Math.max(Math.abs(max) * 0.05, 0.01)
+  return [Math.max(0, min - pad), max + pad]
+}
+
+const formatAxisTick = (value: number | string) => {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return String(value)
+  if (Math.abs(numeric) >= 10) return numeric.toFixed(1).replace(/\.0$/, '')
+  return numeric.toFixed(4).replace(/\.?0+$/, '')
+}
+
+const getChartWindowData = (rows: any[], trialIds: string[], metricKey: string, mode: YAxisMode) => {
+  if (mode === 'overview') return rows
+  const rowsWithVisibleValues = rows.filter((point) =>
+    trialIds.some((trialId) => typeof point[`${trialId}.${metricKey}`] === 'number')
+  )
+  return rowsWithVisibleValues.slice(-Math.max(5, Math.ceil(rowsWithVisibleValues.length * 0.3)))
+}
+
 const shouldOfferForceDelete = (message: string) =>
   message.includes('--force') || message.includes('force=true')
 
@@ -46,6 +89,10 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const [renaming, setRenaming] = useState(false)
+  const [summaryMetricA, setSummaryMetricA] = useState(SUMMARY_METRICS[0].key)
+  const [summaryMetricB, setSummaryMetricB] = useState(SUMMARY_METRICS[2].key)
+  const [summaryYAxisMode, setSummaryYAxisMode] = useState<YAxisMode>('overview')
+  const [hiddenSummaryTrials, setHiddenSummaryTrials] = useState<Set<string>>(new Set())
 
   const experimentIdRef = useRef(experimentId)
   experimentIdRef.current = experimentId
@@ -75,8 +122,9 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
           topTrials.forEach((trialId) => {
             const row = curvesData.curves[trialId].find((item: any) => item.epoch === epoch)
             if (row) {
-              if (typeof row['metrics/mAP50-95(B)'] === 'number') point[`${trialId}.map`] = row['metrics/mAP50-95(B)']
-              if (typeof row['metrics/recall(B)'] === 'number') point[`${trialId}.recall`] = row['metrics/recall(B)']
+              SUMMARY_METRICS.forEach((metric) => {
+                if (typeof row[metric.key] === 'number') point[`${trialId}.${metric.key}`] = row[metric.key]
+              })
             }
           })
           points.push(point)
@@ -93,6 +141,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
 
   useEffect(() => {
     experimentIdRef.current = experimentId
+    setHiddenSummaryTrials(new Set())
     loadData()
   }, [experimentId, loadData])
 
@@ -150,6 +199,98 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
 
   const experiment = detail.experiment
   const canCancel = CANCELLABLE_STATUSES.has(experiment.status)
+  const summaryMetricMap = new Map(SUMMARY_METRICS.map((metric) => [metric.key, metric.label]))
+  const visibleSummaryTrialIds = trialIds.filter((trialId) => !hiddenSummaryTrials.has(trialId))
+
+  const toggleSummaryTrial = (trialId: string) => {
+    setHiddenSummaryTrials((current) => {
+      const next = new Set(current)
+      if (next.has(trialId)) next.delete(trialId)
+      else next.add(trialId)
+      return next
+    })
+  }
+
+  const renderSummaryLegend = () => (
+    <div className="flex items-center justify-center gap-2" style={{ flexWrap: 'wrap', fontSize: 11, paddingTop: 4 }}>
+      {trialIds.map((trialId, index) => {
+        const hidden = hiddenSummaryTrials.has(trialId)
+        return (
+          <button
+            key={trialId}
+            type="button"
+            onClick={() => toggleSummaryTrial(trialId)}
+            title={hidden ? '显示该 Trial 曲线' : '隐藏该 Trial 曲线'}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              border: 'none',
+              background: 'transparent',
+              padding: '2px 4px',
+              cursor: 'pointer',
+              color: hidden ? 'var(--text-muted)' : CHART_COLORS[index % CHART_COLORS.length],
+              textDecoration: hidden ? 'line-through' : 'none',
+              opacity: hidden ? 0.65 : 1,
+            }}
+          >
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: CHART_COLORS[index % CHART_COLORS.length], opacity: hidden ? 0.35 : 1 }} />
+            {trialLabels[trialId] || trialId}
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  const renderSummaryChart = (metricKey: string, setMetricKey: (key: string) => void) => {
+    const chartWindowData = getChartWindowData(chartData, visibleSummaryTrialIds, metricKey, summaryYAxisMode)
+    const yAxisValues = chartWindowData.flatMap((point) =>
+      visibleSummaryTrialIds
+        .map((trialId) => point[`${trialId}.${metricKey}`])
+        .filter((value): value is number => typeof value === 'number')
+    )
+    const yAxisDomain = getYAxisDomain(yAxisValues, summaryYAxisMode)
+
+    return (
+    <div className="inline-chart-card flex-1" style={{ height: 286, margin: 0, paddingBottom: 0 }}>
+      <div className="flex items-center justify-between gap-2" style={{ marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>
+          {summaryMetricMap.get(metricKey) || metricKey} (最近 5 次 Trial)
+        </div>
+        <div className="flex items-center gap-2">
+          <select className="input" style={{ width: 190, height: 34, fontSize: '0.8rem' }} value={metricKey} onChange={(event) => setMetricKey(event.target.value)}>
+            {SUMMARY_METRICS.map((metric) => (
+              <option key={metric.key} value={metric.key}>{metric.label}</option>
+            ))}
+          </select>
+          <button
+            className="btn"
+            style={{ width: 48, height: 34, padding: 0, fontSize: '0.78rem' }}
+            onClick={() => setSummaryYAxisMode((mode) => mode === 'overview' ? 'tail' : 'overview')}
+            title={summaryYAxisMode === 'overview' ? '切换到尾段范围' : '切换到总览范围'}
+          >
+            {summaryYAxisMode === 'overview' ? '尾段' : '总览'}
+          </button>
+        </div>
+      </div>
+      <ResponsiveContainer width="100%" height="88%">
+        <LineChart data={chartWindowData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.2)" vertical={false} />
+          <XAxis dataKey="epoch" tick={{fontSize: 11, fill: 'var(--text-muted)'}} axisLine={false} tickLine={false} />
+          <YAxis domain={yAxisDomain} tickFormatter={formatAxisTick} tick={{fontSize: 11, fill: 'var(--text-muted)'}} axisLine={false} tickLine={false} width={52} allowDataOverflow={summaryYAxisMode === 'tail'} />
+          <Tooltip contentStyle={{ borderRadius: 8, border: 'none', boxShadow: 'var(--shadow-md)', background: 'rgba(255,255,255,0.95)' }} />
+          <Legend content={renderSummaryLegend} />
+          {visibleSummaryTrialIds.map((trialId) => {
+            const index = trialIds.indexOf(trialId)
+            return (
+            <Line key={trialId} type="monotone" dataKey={`${trialId}.${metricKey}`} name={trialLabels[trialId] || trialId} stroke={CHART_COLORS[index % CHART_COLORS.length]} strokeWidth={2} dot={false} connectNulls activeDot={{ r: 4 }} />
+            )
+          })}
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+    )
+  }
 
   return (
     <div className="workspace-grid">
@@ -226,36 +367,8 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
           </div>
           {chartData.length > 0 && (
             <div className="flex gap-4" style={{ margin: '1rem', marginBottom: 0 }}>
-              <div className="inline-chart-card flex-1" style={{ height: 260, margin: 0, paddingBottom: 0 }}>
-                <div style={{ fontSize: '0.85rem', fontWeight: 600, textAlign: 'center', marginBottom: '0.5rem', color: 'var(--text-main)' }}>mAP50-95 (最近 5 次 Trial)</div>
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.2)" vertical={false} />
-                    <XAxis dataKey="epoch" tick={{fontSize: 11, fill: 'var(--text-muted)'}} axisLine={false} tickLine={false} />
-                    <YAxis domain={['auto', 'auto']} tick={{fontSize: 11, fill: 'var(--text-muted)'}} axisLine={false} tickLine={false} width={40} />
-                    <Tooltip contentStyle={{ borderRadius: 8, border: 'none', boxShadow: 'var(--shadow-md)', background: 'rgba(255,255,255,0.95)' }} />
-                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: '4px' }} iconType="circle" iconSize={8} />
-                    {trialIds.map((trialId, index) => (
-                      <Line key={trialId} type="monotone" dataKey={`${trialId}.map`} name={trialLabels[trialId] || trialId} stroke={CHART_COLORS[index % CHART_COLORS.length]} strokeWidth={2} dot={false} connectNulls activeDot={{ r: 4 }} />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="inline-chart-card flex-1" style={{ height: 260, margin: 0, paddingBottom: 0 }}>
-                <div style={{ fontSize: '0.85rem', fontWeight: 600, textAlign: 'center', marginBottom: '0.5rem', color: 'var(--text-main)' }}>Recall (最近 5 次 Trial)</div>
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.2)" vertical={false} />
-                    <XAxis dataKey="epoch" tick={{fontSize: 11, fill: 'var(--text-muted)'}} axisLine={false} tickLine={false} />
-                    <YAxis domain={['auto', 'auto']} tick={{fontSize: 11, fill: 'var(--text-muted)'}} axisLine={false} tickLine={false} width={40} />
-                    <Tooltip contentStyle={{ borderRadius: 8, border: 'none', boxShadow: 'var(--shadow-md)', background: 'rgba(255,255,255,0.95)' }} />
-                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: '4px' }} iconType="circle" iconSize={8} />
-                    {trialIds.map((trialId, index) => (
-                      <Line key={trialId} type="monotone" dataKey={`${trialId}.recall`} name={trialLabels[trialId] || trialId} stroke={CHART_COLORS[index % CHART_COLORS.length]} strokeWidth={2} dot={false} connectNulls activeDot={{ r: 4 }} />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+              {renderSummaryChart(summaryMetricA, setSummaryMetricA)}
+              {renderSummaryChart(summaryMetricB, setSummaryMetricB)}
             </div>
           )}
           <div style={{ flex: 1, overflow: 'hidden', marginTop: chartData.length > 0 ? '1rem' : '0' }}>

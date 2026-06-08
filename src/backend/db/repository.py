@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -131,6 +133,14 @@ class Repository:
                 conn.execute("ALTER TABLE experiments ADD COLUMN description TEXT NOT NULL DEFAULT ''")
             if "project" not in columns:
                 conn.execute("ALTER TABLE experiments ADD COLUMN project TEXT NOT NULL DEFAULT ''")
+            legacy_columns = {"session_key", "auto_iterate", "confirm_timeout"}
+            if legacy_columns.intersection(columns):
+                self._backup_database()
+                self._rebuild_experiments_table(conn)
+                columns = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(experiments)").fetchall()
+                }
             conn.execute(
                 """
                 UPDATE experiments
@@ -173,6 +183,53 @@ class Repository:
             for column, definition in trial_defaults.items():
                 if column not in trial_columns:
                     conn.execute(f"ALTER TABLE trials ADD COLUMN {column} {definition}")
+
+    def _backup_database(self) -> None:
+        if self.db_path == ":memory:":
+            return
+        db_path = Path(self.db_path)
+        if not db_path.exists():
+            return
+        backup_path = db_path.with_name(
+            f"{db_path.name}.schema-backup-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        )
+        shutil.copy2(db_path, backup_path)
+
+    def _rebuild_experiments_table(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE experiments_new (
+                experiment_id TEXT PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                project TEXT NOT NULL DEFAULT '',
+                task_type TEXT NOT NULL,
+                dataset_root TEXT NOT NULL,
+                dataset_yaml TEXT NOT NULL,
+                pretrained_model TEXT NOT NULL,
+                save_root TEXT NOT NULL,
+                goal_config TEXT NOT NULL,
+                status TEXT NOT NULL,
+                initial_params TEXT NOT NULL,
+                search_space TEXT NOT NULL,
+                stop_conditions TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            INSERT INTO experiments_new (
+                experiment_id, description, project, task_type, dataset_root, dataset_yaml,
+                pretrained_model, save_root, goal_config, status, initial_params,
+                search_space, stop_conditions, created_at
+            )
+            SELECT
+                experiment_id, description, project, task_type, dataset_root, dataset_yaml,
+                pretrained_model, save_root, goal_config, status, initial_params,
+                search_space, stop_conditions, created_at
+            FROM experiments;
+
+            DROP TABLE experiments;
+            ALTER TABLE experiments_new RENAME TO experiments;
+            """
+        )
 
     def _next_id(self, prefix: str, table: str, column: str) -> str:
         with self._connect() as conn:

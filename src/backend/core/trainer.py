@@ -47,6 +47,8 @@ def run_training(
     trial_name: str,
     params: dict[str, Any],
     *,
+    python_executable: str | None = None,
+    src_root: str | None = None,
     process_key: str | None = None,
 ) -> dict[str, str]:
     run_path = Path(run_dir)
@@ -67,10 +69,16 @@ def run_training(
         encoding="utf-8",
     )
 
-    command = [sys.executable, "-m", "backend.core.train_worker", str(request_path)]
+    command = [python_executable or sys.executable, "-m", "backend.core.train_worker", str(request_path)]
+    env = dict(os.environ)
+    if src_root:
+        env["PYTHONPATH"] = src_root if not env.get("PYTHONPATH") else f"{src_root}{os.pathsep}{env['PYTHONPATH']}"
     popen_kwargs: dict[str, Any] = {
         "cwd": str(run_path.parent),
         "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "env": env,
     }
     if os.name == "nt":
         popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)

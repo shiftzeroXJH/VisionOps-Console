@@ -875,6 +875,8 @@ class OrchestratorService:
                 run_dir=str(trial_dir),
                 trial_name=display_name,
                 params=trial_params,
+                python_executable=_python_for_yolo(),
+                src_root=str(Path(__file__).resolve().parent.parent),
                 process_key=experiment_id,
             )
             if self.repo.get_experiment(experiment_id).status == STATE_CANCELLED:

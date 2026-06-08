@@ -26,7 +26,7 @@ export function TrialComparisonTable({ data, onRowClick, onRequestDeleteTrial }:
 
   const cols = [
     'iteration', 'display_name', 'status', 'model_display', 'source', 'server',
-    'map50_95', 'delta_map50_95', 'precision', 'recall',
+    'map50_95', 'map50', 'delta_map50_95', 'precision', 'recall',
     'best_epoch', 'epochs_completed', 'imgsz', 'batch', 'lr0', 'patience',
   ]
 
