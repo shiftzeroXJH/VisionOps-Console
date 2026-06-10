@@ -690,3 +690,22 @@ def test_run_trial_uses_yolo_python_for_training_worker(tmp_path: Path, monkeypa
     assert captured_kwargs["python_executable"] == "D:/fake/yolo/python.exe"
     assert captured_kwargs["src_root"].endswith("src")
 
+
+def test_run_trial_rejects_missing_dataset_yaml_before_creating_trial_dir(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset_missing_yaml"
+    _write_file(dataset_root / "data.yaml", "train: images/train\nval: images/val\nnames: [part]\n")
+    service = OrchestratorService(db_path=":memory:")
+    experiment_id = _create_experiment(service, tmp_path, dataset_root)
+    (dataset_root / "data.yaml").unlink()
+
+    try:
+        service.run_trial(experiment_id)
+    except FileNotFoundError as exc:
+        assert "dataset yaml not found" in str(exc)
+    else:
+        raise AssertionError("expected missing dataset yaml to be rejected")
+
+    experiment_run_dir = tmp_path / "runs" / "experiments" / experiment_id
+    assert sorted(path.name for path in experiment_run_dir.iterdir()) == ["experiment.json"]
+    assert service.repo.list_trials(experiment_id) == []
+

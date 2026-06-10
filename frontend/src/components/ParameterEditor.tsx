@@ -78,6 +78,17 @@ const DEFAULT_EXPANDED: Record<string, boolean> = {
   appearance: false,
 }
 
+const waitForTrainingJob = async (jobId: string) => {
+  const deadline = Date.now() + 30000
+  while (Date.now() < deadline) {
+    const job = await api.getJob(jobId)
+    if (job.status === 'failed') throw new Error(job.error || '训练启动失败')
+    if (job.status === 'completed') return job
+    await new Promise((resolve) => window.setTimeout(resolve, 800))
+  }
+  return null
+}
+
 export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) {
   const [schemaData, setSchemaData] = useState<any>(null)
   const [params, setParams] = useState<any>({})
@@ -126,12 +137,13 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
     if (!isValid) return
     setLoading(true)
     try {
-      await api.runTrial(experimentId, { params, pretrained: model, note, reason: 'Manual tuning' })
+      const job = await api.runTrial(experimentId, { params, pretrained: model, note, reason: 'Manual tuning' })
+      if (job?.job_id) await waitForTrainingJob(job.job_id)
       setNote('')
-      onRunSuccess()
+      await onRunSuccess()
       onClose?.()
     } catch (err: any) {
-      alert(err?.detail?.error || '运行失败')
+      alert(err?.detail?.error || err?.message || '运行失败')
     } finally {
       setLoading(false)
     }

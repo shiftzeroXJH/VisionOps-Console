@@ -830,11 +830,11 @@ class OrchestratorService:
         trial_params = validation["normalized_params"]
         trial_model = _resolve_pretrained_model(pretrained or config.pretrained_model)
         _validate_pretrained_model(trial_model)
+        dataset_analysis = analyze_dataset(config.dataset_yaml)
         display_name = self._next_trial_display_name(experiment_id, trial_model, trial_params)
         trial_id = self.repo.next_trial_id()
         trial_dir = ensure_dir(Path(config.save_root) / "experiments" / experiment_id / display_name)
         status = STATE_TRAINING if iteration == 1 else STATE_RETRAINING
-        dataset_analysis = analyze_dataset(config.dataset_yaml)
         trial = TrialRecord(
             trial_id=trial_id,
             display_name=display_name,
