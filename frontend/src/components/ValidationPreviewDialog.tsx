@@ -14,6 +14,9 @@ const metricLabels: Record<string, string> = {
   recall: 'Recall',
 }
 
+const MIN_ZOOM = 0.02
+const MAX_ZOOM = 12
+
 export function ValidationPreviewDialog({ trial, onClose }: Props) {
   const [imageLimit, setImageLimit] = useState(50)
   const [conf, setConf] = useState(0.25)
@@ -38,7 +41,6 @@ export function ValidationPreviewDialog({ trial, onClose }: Props) {
         if (job.status === 'completed') {
           setResult(job.result)
           setImageIndex(0)
-          resetView()
           window.clearInterval(timer)
         }
         if (job.status === 'failed') {
@@ -67,15 +69,59 @@ export function ValidationPreviewDialog({ trial, onClose }: Props) {
     }
   }
 
-  const adjustZoom = (nextZoom: number) => {
-    const boundedZoom = Math.max(0.25, Math.min(6, Number(nextZoom.toFixed(2))))
+  const viewportPoint = (event: React.MouseEvent | React.WheelEvent) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    return {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    }
+  }
+
+  const viewportCenter = () => {
+    const viewport = labelViewportRef.current
+    if (!viewport) return null
+    return {
+      x: viewport.clientWidth / 2,
+      y: viewport.clientHeight / 2,
+    }
+  }
+
+  const fitZoom = () => {
+    const viewport = labelViewportRef.current
+    if (!viewport || !imageSize.width || !imageSize.height) return 1
+    return Math.max(
+      MIN_ZOOM,
+      Math.min(viewport.clientWidth / imageSize.width, viewport.clientHeight / imageSize.height, MAX_ZOOM)
+    )
+  }
+
+  const centeredOffset = (nextZoom: number) => {
+    const viewport = labelViewportRef.current
+    if (!viewport || !imageSize.width || !imageSize.height) return { x: 0, y: 0 }
+    return {
+      x: (viewport.clientWidth - imageSize.width * nextZoom) / 2,
+      y: (viewport.clientHeight - imageSize.height * nextZoom) / 2,
+    }
+  }
+
+  const adjustZoom = (nextZoom: number, anchor = viewportCenter()) => {
+    const boundedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number(nextZoom.toFixed(4))))
+    setOffset((current) => {
+      if (!anchor) return clampOffset(current, boundedZoom)
+      const imageX = (anchor.x - current.x) / zoom
+      const imageY = (anchor.y - current.y) / zoom
+      return clampOffset({
+        x: anchor.x - imageX * boundedZoom,
+        y: anchor.y - imageY * boundedZoom,
+      }, boundedZoom)
+    })
     setZoom(boundedZoom)
-    setOffset((current) => clampOffset(current, boundedZoom))
   }
 
   const resetView = () => {
-    setZoom(1)
-    setOffset(clampOffset({ x: 0, y: 0 }, 1))
+    const nextZoom = fitZoom()
+    setZoom(nextZoom)
+    setOffset(clampOffset(centeredOffset(nextZoom), nextZoom))
   }
 
   const imageUrl = (filename: string) => (
@@ -89,8 +135,6 @@ export function ValidationPreviewDialog({ trial, onClose }: Props) {
   const moveImage = (delta: number) => {
     if (!images.length) return
     setImageIndex((current) => Math.max(0, Math.min(images.length - 1, current + delta)))
-    setZoom(1)
-    setOffset({ x: 0, y: 0 })
     setImageSize({ width: 0, height: 0 })
   }
 
@@ -113,6 +157,11 @@ export function ValidationPreviewDialog({ trial, onClose }: Props) {
     setOffset((current) => clampOffset(current))
   }, [imageSize, zoom, imageIndex])
 
+  useEffect(() => {
+    if (!imageSize.width || !imageSize.height) return
+    resetView()
+  }, [imageSize, imageIndex])
+
   const renderPane = (title: string, filename: string, isLabel = false) => (
     <section className="validation-pane">
       <div className="validation-pane-title">{title}</div>
@@ -121,7 +170,7 @@ export function ValidationPreviewDialog({ trial, onClose }: Props) {
         ref={isLabel ? labelViewportRef : undefined}
         onWheel={(event) => {
           event.preventDefault()
-          adjustZoom(zoom + (event.deltaY < 0 ? 0.12 : -0.12))
+          adjustZoom(zoom * (event.deltaY < 0 ? 1.12 : 0.88), viewportPoint(event))
         }}
         onMouseDown={(event) => setDragStart({ x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y })}
         onMouseMove={(event) => {
