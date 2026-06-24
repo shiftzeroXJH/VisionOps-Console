@@ -123,6 +123,12 @@ class Repository:
                     payload_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             columns = {
@@ -260,6 +266,29 @@ class Repository:
                 (trial_id,),
             ).fetchone()
         return row is not None
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                (key,),
+            ).fetchone()
+        if row is None:
+            return default
+        return str(row["value"] or "")
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, str(value or ""), utc_now_iso()),
+            )
 
     def trial_display_name_exists(
         self,
@@ -748,4 +777,3 @@ class Repository:
             if trial.summary_path and Path(trial.summary_path).exists():
                 summaries.append(json.loads(Path(trial.summary_path).read_text(encoding="utf-8")))
         return summaries
-

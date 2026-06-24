@@ -11,6 +11,57 @@ $frontendIndex = Join-Path $projectRoot "frontend\dist\index.html"
 
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
+function Get-ConfiguredPython {
+    param(
+        [string]$DbPath
+    )
+
+    if ($env:YOLO_PYTHON) {
+        return $env:YOLO_PYTHON
+    }
+
+    if (Test-Path -LiteralPath $DbPath) {
+        $query = @"
+import sqlite3, sys
+db_path = sys.argv[1]
+try:
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT value FROM settings WHERE key = 'yolo_python'").fetchone()
+    if row and row[0]:
+        print(str(row[0]).strip())
+finally:
+    try:
+        conn.close()
+    except Exception:
+        pass
+"@
+        try {
+            $configured = & python -c $query $DbPath 2>$null
+            if ($LASTEXITCODE -eq 0 -and $configured) {
+                return $configured.Trim()
+            }
+        } catch {
+        }
+    }
+
+    $candidates = @(
+        "C:\Users\Administrator\miniconda3\envs\yolo_env\python.exe",
+        "C:\Users\Administrator\miniforge3\envs\yolo_env\python.exe",
+        "C:\Users\Administrator\anaconda3\envs\yolo_env\python.exe",
+        "python"
+    )
+    foreach ($candidate in $candidates) {
+        if ($candidate -eq "python") {
+            return $candidate
+        }
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    return "python"
+}
+
 if (-not (Test-Path -LiteralPath $frontendIndex)) {
     Write-Host "Frontend build not found: $frontendIndex"
     Write-Host "Run: cd frontend && npm install && npm run build"
@@ -31,15 +82,13 @@ if (Test-Path -LiteralPath $pidFile) {
     Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
 }
 
-$python = $env:YOLO_PYTHON
-if (-not $python) {
-    $python = "python"
-}
+$python = Get-ConfiguredPython -DbPath $dbPath
 
 $command = @(
     "`$env:YOLO_DB_PATH='$dbPath'"
     "`$env:YOLO_HOST='0.0.0.0'"
     "`$env:YOLO_PORT='8765'"
+    "`$env:YOLO_PYTHON='$python'"
     "`$env:PYTHONPATH='$srcPath'"
     "Set-Location '$projectRoot'"
     "& '$python' -m backend.api"
@@ -56,6 +105,7 @@ $process = Start-Process `
 Set-Content -LiteralPath $pidFile -Value $process.Id -Encoding ascii
 
 Write-Host "YOLO Platform started."
+Write-Host "Python: $python"
 Write-Host "PID: $($process.Id)"
 Write-Host "URL: http://127.0.0.1:8765/"
 Write-Host "DB: $dbPath"

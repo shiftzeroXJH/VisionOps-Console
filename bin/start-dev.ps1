@@ -10,16 +10,96 @@ $dbPath = Join-Path $projectRoot "yolo_state.sqlite"
 
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-$python = $env:YOLO_PYTHON
-if (-not $python) {
-    $python = "python"
+function Test-ManagedProcess {
+    param(
+        [string]$PidFile,
+        [string[]]$ExpectedProcessNames
+    )
+
+    if (-not (Test-Path -LiteralPath $PidFile)) {
+        return $false
+    }
+
+    $pidText = (Get-Content -LiteralPath $PidFile -Raw).Trim()
+    if (-not $pidText) {
+        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+
+    $process = Get-Process -Id ([int]$pidText) -ErrorAction SilentlyContinue
+    if ($null -eq $process) {
+        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+
+    if ($ExpectedProcessNames -notcontains $process.ProcessName) {
+        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+
+    return $true
 }
 
-if (-not (Test-Path -LiteralPath $backendPidFile)) {
+function Get-ConfiguredPython {
+    param(
+        [string]$ProjectRoot,
+        [string]$DbPath
+    )
+
+    if ($env:YOLO_PYTHON) {
+        return $env:YOLO_PYTHON
+    }
+
+    if (Test-Path -LiteralPath $DbPath) {
+        $query = @"
+import sqlite3, sys
+db_path = sys.argv[1]
+try:
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT value FROM settings WHERE key = 'yolo_python'").fetchone()
+    if row and row[0]:
+        print(str(row[0]).strip())
+finally:
+    try:
+        conn.close()
+    except Exception:
+        pass
+"@
+        try {
+            $configured = & python -c $query $DbPath 2>$null
+            if ($LASTEXITCODE -eq 0 -and $configured) {
+                return $configured.Trim()
+            }
+        } catch {
+        }
+    }
+
+    $candidates = @(
+        "C:\Users\Administrator\miniconda3\envs\yolo_env\python.exe",
+        "C:\Users\Administrator\miniforge3\envs\yolo_env\python.exe",
+        "C:\Users\Administrator\anaconda3\envs\yolo_env\python.exe",
+        "python"
+    )
+    foreach ($candidate in $candidates) {
+        if ($candidate -eq "python") {
+            return $candidate
+        }
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    return "python"
+}
+
+$python = Get-ConfiguredPython -ProjectRoot $projectRoot -DbPath $dbPath
+
+if (-not (Test-ManagedProcess -PidFile $backendPidFile -ExpectedProcessNames @("powershell", "pwsh"))) {
     $backendCommand = @(
         "`$env:YOLO_DB_PATH='$dbPath'"
         "`$env:YOLO_HOST='127.0.0.1'"
         "`$env:YOLO_PORT='8765'"
+        "`$env:YOLO_PYTHON='$python'"
         "`$env:PYTHONPATH='$srcPath'"
         "Set-Location '$projectRoot'"
         "& '$python' -m backend.api"
@@ -28,10 +108,12 @@ if (-not (Test-Path -LiteralPath $backendPidFile)) {
     Set-Content -LiteralPath $backendPidFile -Value $backend.Id -Encoding ascii
 }
 
-if (-not (Test-Path -LiteralPath $frontendPidFile)) {
+if (-not (Test-ManagedProcess -PidFile $frontendPidFile -ExpectedProcessNames @("cmd", "node", "npm"))) {
     $frontend = Start-Process -FilePath "npm.cmd" -ArgumentList @("run", "dev", "--", "--host", "127.0.0.1") -WorkingDirectory $frontendRoot -RedirectStandardOutput (Join-Path $logDir "dev-frontend.stdout.log") -RedirectStandardError (Join-Path $logDir "dev-frontend.stderr.log") -WindowStyle Hidden -PassThru
     Set-Content -LiteralPath $frontendPidFile -Value $frontend.Id -Encoding ascii
 }
+
+Write-Host "Using Python: $python"
 
 Write-Host "Development servers started."
 Write-Host "Frontend: http://127.0.0.1:5173/"

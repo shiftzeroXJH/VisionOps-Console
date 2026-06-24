@@ -14,8 +14,12 @@ foreach ($pidFile in $pidFiles) {
     if ($pidText) {
         $process = Get-Process -Id ([int]$pidText) -ErrorAction SilentlyContinue
         if ($null -ne $process) {
-            & taskkill /F /T /PID ([int]$pidText) *>&1 | Out-Null
-            Write-Host "Stopped process $pidText."
+            if ($process.ProcessName -in @("powershell", "pwsh", "cmd", "node", "npm")) {
+                & taskkill /F /T /PID ([int]$pidText) *>&1 | Out-Null
+                Write-Host "Stopped process $pidText."
+            } else {
+                Write-Host "Skipped stale pid $pidText ($($process.ProcessName))."
+            }
         }
     }
     Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue

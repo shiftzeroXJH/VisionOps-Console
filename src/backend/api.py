@@ -49,6 +49,20 @@ def clear_validation_cache() -> dict[str, Any]:
     return _invoke_sync("clear-validation-cache", service.clear_validation_preview_cache)
 
 
+@app.get("/api/settings")
+def get_settings() -> dict[str, Any]:
+    return _invoke_sync("get-settings", service.get_settings)
+
+
+@app.patch("/api/settings")
+def update_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload or {})
+    return _invoke_sync(
+        "update-settings",
+        lambda: service.update_settings(yolo_python=body.get("yolo_python")),
+    )
+
+
 @app.get("/api/remote-servers")
 def list_remote_servers() -> dict[str, Any]:
     return _invoke_sync("list-remote-servers", service.list_remote_servers)
@@ -350,4 +364,3 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-

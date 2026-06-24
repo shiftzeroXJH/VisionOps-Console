@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Trash2, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Save, Trash2, X } from 'lucide-react'
 import { api } from '../api'
 
 interface Props {
@@ -20,11 +20,43 @@ const formatBytes = (bytes: number) => {
 
 export function SettingsDialog({ onClose }: Props) {
   const [clearing, setClearing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [yoloPython, setYoloPython] = useState('')
+  const [effectivePython, setEffectivePython] = useState('')
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState('')
+  const [saveMessage, setSaveMessage] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadSettings = async () => {
+      setLoading(true)
+      setError('')
+      try {
+        const res = await api.getSettings()
+        if (cancelled) return
+        setYoloPython(res.yolo_python || '')
+        setEffectivePython(res.effective_yolo_python || '')
+      } catch (err: any) {
+        if (cancelled) return
+        setError(err?.detail?.error || '加载设置失败')
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    }
+
+    void loadSettings()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const clearValidationCache = async () => {
-    if (!confirm('确定清除所有验证缓存吗？这只会删除验证可视化临时图片，不会删除训练记录。')) return
+    if (!confirm('确定清除所有验证缓存吗？这只会删除预览图片，不会删除训练记录。')) return
     setClearing(true)
     setError('')
     setResult(null)
@@ -35,6 +67,22 @@ export function SettingsDialog({ onClose }: Props) {
       setError(err?.detail?.error || '清除缓存失败')
     } finally {
       setClearing(false)
+    }
+  }
+
+  const saveSettings = async () => {
+    setSaving(true)
+    setError('')
+    setSaveMessage('')
+    try {
+      const res = await api.updateSettings({ yolo_python: yoloPython })
+      setYoloPython(res.yolo_python || '')
+      setEffectivePython(res.effective_yolo_python || '')
+      setSaveMessage('已保存。后续训练、验证预览和导出都会使用这个 Python。')
+    } catch (err: any) {
+      setError(err?.detail?.error || '保存设置失败')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -49,10 +97,33 @@ export function SettingsDialog({ onClose }: Props) {
           <button className="btn" onClick={onClose} title="关闭"><X size={18} /></button>
         </div>
 
+        <section className="settings-section settings-section-stack">
+          <div className="settings-form-block">
+            <h3>YOLO Python</h3>
+            <p className="text-muted">
+              设置训练、验证预览和导出 ONNX 时使用的 Python 可执行文件。留空时会使用当前检测到的默认路径。
+            </p>
+            <input
+              className="input"
+              value={yoloPython}
+              onChange={(e) => setYoloPython(e.target.value)}
+              placeholder="例如：C:\\Users\\Administrator\\miniconda3\\envs\\yolo_env\\python.exe"
+              disabled={loading || saving}
+            />
+            <div className="settings-effective">
+              <span className="text-muted">当前生效路径</span>
+              <code>{effectivePython || '未检测到'}</code>
+            </div>
+          </div>
+          <button className="btn btn-primary" onClick={saveSettings} disabled={loading || saving}>
+            <Save size={16} /> {saving ? '保存中...' : '保存设置'}
+          </button>
+        </section>
+
         <section className="settings-section">
           <div>
             <h3>验证缓存</h3>
-            <p className="text-muted">清除 Trial 验证功能生成的 label/predict 临时图片，避免长时间使用后占用过多磁盘空间。</p>
+            <p className="text-muted">清除验证功能生成的 label/predict 预览图片，释放磁盘空间。</p>
           </div>
           <button className="btn btn-danger" onClick={clearValidationCache} disabled={clearing}>
             <Trash2 size={16} /> {clearing ? '清除中...' : '清除缓存'}
@@ -61,12 +132,13 @@ export function SettingsDialog({ onClose }: Props) {
 
         {result && (
           <div className="settings-result">
-            已清除 {result.deleted_dirs || 0} 个缓存目录、{result.deleted_files || 0} 个文件，释放 {formatBytes(result.deleted_bytes || 0)}。
+            已清除 {result.deleted_dirs || 0} 个缓存目录，{result.deleted_files || 0} 个文件，释放 {formatBytes(result.deleted_bytes || 0)}。
             {Array.isArray(result.warnings) && result.warnings.length > 0 && (
               <div className="text-warning" style={{ marginTop: '0.5rem' }}>{result.warnings.join('；')}</div>
             )}
           </div>
         )}
+        {saveMessage && <div className="settings-result text-success">{saveMessage}</div>}
         {error && <div className="settings-result text-danger">{error}</div>}
       </div>
     </div>

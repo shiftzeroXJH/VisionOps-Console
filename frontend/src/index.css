@@ -782,6 +782,24 @@ tr:hover td {
   background: rgba(255,255,255,0.5);
 }
 
+.settings-section-stack {
+  grid-template-columns: 1fr;
+}
+
+.settings-form-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.settings-effective {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
 .settings-section h3 {
   font-size: 1rem;
   margin-bottom: 0.25rem;

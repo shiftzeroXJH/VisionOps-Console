@@ -61,6 +61,7 @@ MODEL_FILENAME_ALIASES = {
     "yolov11n-obb.pt": "yolo11n-obb.pt",
 }
 DEFAULT_YOLO_PYTHON = r"D:\apps\miniforge\envs\yolo_env\python.exe"
+YOLO_PYTHON_SETTING_KEY = "yolo_python"
 ILLEGAL_WINDOWS_NAME_CHARS = set('<>:"/\\|?*')
 
 
@@ -154,13 +155,22 @@ def _export_filename(model_name: str, model: str, task_type: str, imgsz: int) ->
     return f"{model_name}-{_model_stem(model)}-{int(imgsz)}.onnx"
 
 
-def _python_for_yolo() -> str:
-    configured = os.environ.get("YOLO_PYTHON", "").strip()
-    if configured:
-        return configured
-    if Path(DEFAULT_YOLO_PYTHON).exists():
-        return DEFAULT_YOLO_PYTHON
-    return sys.executable
+def _default_python_candidates() -> list[str]:
+    candidates: list[str] = []
+    env_python = os.environ.get("YOLO_PYTHON", "").strip()
+    if env_python:
+        candidates.append(env_python)
+    candidates.append(DEFAULT_YOLO_PYTHON)
+    if os.name == "nt":
+        candidates.extend(
+            [
+                r"C:\Users\Administrator\miniconda3\envs\yolo_env\python.exe",
+                r"C:\Users\Administrator\miniforge3\envs\yolo_env\python.exe",
+                r"C:\Users\Administrator\anaconda3\envs\yolo_env\python.exe",
+            ]
+        )
+    candidates.append(sys.executable)
+    return candidates
 
 
 def _safe_validation_id() -> str:
@@ -309,6 +319,7 @@ class OrchestratorService:
             if new_repo_path.name == "yolo_state.sqlite":
                 self._migrate_legacy_db_if_needed(old_repo_path, new_repo_path)
         self.repo = Repository(repo_path)
+        self._bootstrap_python_setting()
 
     def _migrate_legacy_db_if_needed(self, old_repo_path: Path, new_repo_path: Path) -> None:
         if not old_repo_path.exists():
@@ -340,6 +351,50 @@ class OrchestratorService:
 
     def inspect_dataset(self, dataset_root: str) -> dict[str, Any]:
         return {"yaml_candidates": inspect_dataset(dataset_root)}
+
+    def _bootstrap_python_setting(self) -> None:
+        configured = self.repo.get_setting(YOLO_PYTHON_SETTING_KEY, "").strip()
+        if configured:
+            return
+        env_python = os.environ.get("YOLO_PYTHON", "").strip()
+        if not env_python:
+            return
+        path = Path(env_python).expanduser()
+        if not path.exists() or path.is_dir():
+            return
+        self.repo.set_setting(YOLO_PYTHON_SETTING_KEY, str(path.resolve()))
+
+    def _python_for_yolo(self) -> str:
+        configured = self.repo.get_setting(YOLO_PYTHON_SETTING_KEY, "").strip()
+        if configured:
+            return configured
+        for candidate in _default_python_candidates():
+            normalized = str(candidate or "").strip()
+            if normalized and Path(normalized).exists():
+                return normalized
+        return sys.executable
+
+    def get_settings(self) -> dict[str, Any]:
+        configured = self.repo.get_setting(YOLO_PYTHON_SETTING_KEY, "").strip()
+        effective = self._python_for_yolo()
+        return {
+            "yolo_python": configured,
+            "effective_yolo_python": effective,
+            "uses_default_python": not bool(configured),
+        }
+
+    def update_settings(self, *, yolo_python: str | None = None) -> dict[str, Any]:
+        if yolo_python is not None:
+            normalized = str(yolo_python or "").strip()
+            if normalized:
+                path = Path(normalized).expanduser()
+                if not path.exists():
+                    raise ServiceError(f"python executable not found: {normalized}")
+                if path.is_dir():
+                    raise ServiceError(f"python executable is a directory: {normalized}")
+                normalized = str(path.resolve())
+            self.repo.set_setting(YOLO_PYTHON_SETTING_KEY, normalized)
+        return self.get_settings()
 
     def list_remote_servers(self) -> dict[str, Any]:
         return {
@@ -875,7 +930,7 @@ class OrchestratorService:
                 run_dir=str(trial_dir),
                 trial_name=display_name,
                 params=trial_params,
-                python_executable=_python_for_yolo(),
+                python_executable=self._python_for_yolo(),
                 src_root=str(Path(__file__).resolve().parent.parent),
                 process_key=experiment_id,
             )
@@ -1090,7 +1145,7 @@ class OrchestratorService:
             },
         )
 
-        python_executable = _python_for_yolo()
+        python_executable = self._python_for_yolo()
         env = dict(os.environ)
         src_root = str(Path(__file__).resolve().parent.parent)
         env["PYTHONPATH"] = src_root if not env.get("PYTHONPATH") else f"{src_root}{os.pathsep}{env['PYTHONPATH']}"
@@ -1175,7 +1230,7 @@ class OrchestratorService:
             },
         )
 
-        python_executable = _python_for_yolo()
+        python_executable = self._python_for_yolo()
         env = dict(os.environ)
         src_root = str(Path(__file__).resolve().parent.parent)
         env["PYTHONPATH"] = src_root if not env.get("PYTHONPATH") else f"{src_root}{os.pathsep}{env['PYTHONPATH']}"
@@ -1929,4 +1984,3 @@ class OrchestratorService:
         if not file_path.exists() or not file_path.is_file():
             raise ServiceError("file not found")
         return str(file_path)
-

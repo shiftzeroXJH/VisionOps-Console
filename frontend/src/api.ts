@@ -48,6 +48,22 @@ export const api = {
     return res.json();
   },
 
+  async getSettings() {
+    const res = await fetch('/api/settings');
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async updateSettings(payload: { yolo_python: string }) {
+    const res = await fetch('/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
   async createExperiment(payload: any) {
     const res = await fetch('/api/experiments', {
       method: 'POST',
