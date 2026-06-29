@@ -40,7 +40,7 @@ from backend.core.trainer import (
 )
 from backend.db.repository import Repository, default_project_name
 from backend.models import ExperimentConfig, GoalConfig, RemoteServer, TrialRecord
-from backend.utils import ensure_dir, read_json, utc_now_iso, write_json
+from backend.utils import ensure_dir, local_weights_dir, read_json, utc_now_iso, write_json
 
 
 class ServiceError(RuntimeError):
@@ -173,6 +173,14 @@ def _default_python_candidates() -> list[str]:
     return candidates
 
 
+def _python_for_yolo() -> str:
+    for candidate in _default_python_candidates():
+        normalized = str(candidate or "").strip()
+        if normalized and Path(normalized).exists():
+            return normalized
+    return sys.executable
+
+
 def _safe_validation_id() -> str:
     return datetime.now(timezone.utc).strftime("val_%Y%m%d_%H%M%S_%f")
 
@@ -280,6 +288,10 @@ def _resolve_pretrained_model(pretrained: str) -> str:
     if package_model_path.exists():
         return str(package_model_path.resolve())
 
+    local_weight_path = local_weights_dir() / normalized_pretrained
+    if local_weight_path.exists():
+        return str(local_weight_path.resolve())
+
     if pretrained_path.exists():
         return str(pretrained_path.resolve())
 
@@ -353,6 +365,8 @@ class OrchestratorService:
         return {"yaml_candidates": inspect_dataset(dataset_root)}
 
     def _bootstrap_python_setting(self) -> None:
+        if not hasattr(self.repo, "get_setting") or not hasattr(self.repo, "set_setting"):
+            return
         configured = self.repo.get_setting(YOLO_PYTHON_SETTING_KEY, "").strip()
         if configured:
             return
@@ -368,11 +382,7 @@ class OrchestratorService:
         configured = self.repo.get_setting(YOLO_PYTHON_SETTING_KEY, "").strip()
         if configured:
             return configured
-        for candidate in _default_python_candidates():
-            normalized = str(candidate or "").strip()
-            if normalized and Path(normalized).exists():
-                return normalized
-        return sys.executable
+        return _python_for_yolo()
 
     def get_settings(self) -> dict[str, Any]:
         configured = self.repo.get_setting(YOLO_PYTHON_SETTING_KEY, "").strip()

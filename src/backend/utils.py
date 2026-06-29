@@ -16,6 +16,18 @@ def ensure_dir(path: str | Path) -> Path:
     return path_obj
 
 
+def project_root() -> Path:
+    current = Path(__file__).resolve()
+    for candidate in current.parents:
+        if (candidate / "pyproject.toml").exists():
+            return candidate
+    return current.parents[2]
+
+
+def local_weights_dir() -> Path:
+    return project_root() / "weights"
+
+
 def read_json(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 

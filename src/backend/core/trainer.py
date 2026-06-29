@@ -5,10 +5,13 @@ import os
 import signal
 import subprocess
 import sys
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from typing import Any
+
+from backend.utils import local_weights_dir
 
 
 class TrainingError(RuntimeError):
@@ -53,6 +56,8 @@ def run_training(
 ) -> dict[str, str]:
     run_path = Path(run_dir)
     run_path.mkdir(parents=True, exist_ok=True)
+    run_path = run_path.resolve()
+    _prepare_amp_check_weight(run_path)
     stdout_log = run_path / "stdout.log"
     stderr_log = run_path / "stderr.log"
     request_path = run_path / ".train_request.json"
@@ -69,12 +74,12 @@ def run_training(
         encoding="utf-8",
     )
 
-    command = [python_executable or sys.executable, "-m", "backend.core.train_worker", str(request_path)]
+    command = [python_executable or sys.executable, "-m", "backend.core.train_worker", str(request_path.resolve())]
     env = dict(os.environ)
     if src_root:
         env["PYTHONPATH"] = src_root if not env.get("PYTHONPATH") else f"{src_root}{os.pathsep}{env['PYTHONPATH']}"
     popen_kwargs: dict[str, Any] = {
-        "cwd": str(run_path.parent),
+        "cwd": str(run_path),
         "text": True,
         "encoding": "utf-8",
         "errors": "replace",
@@ -116,6 +121,17 @@ def run_training(
         "stdout_log": str(stdout_log.resolve()),
         "stderr_log": str(stderr_log.resolve()),
     }
+
+
+def _prepare_amp_check_weight(run_path: Path) -> None:
+    source = local_weights_dir() / "yolo26n.pt"
+    target = run_path / "yolo26n.pt"
+    if not source.exists() or target.exists():
+        return
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copy2(source, target)
 
 
 def _register_training_process(process_key: str, process: subprocess.Popen[str]) -> None:
@@ -162,4 +178,3 @@ def _read_training_error(stderr_log: Path) -> str:
         return ""
     tail = [line.strip() for line in lines[-20:] if line.strip()]
     return tail[-1] if tail else ""
-
