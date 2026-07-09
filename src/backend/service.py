@@ -62,6 +62,8 @@ MODEL_FILENAME_ALIASES = {
 }
 DEFAULT_YOLO_PYTHON = r"D:\apps\miniforge\envs\yolo_env\python.exe"
 YOLO_PYTHON_SETTING_KEY = "yolo_python"
+DEFAULT_EXPORT_DIR = r"C:\Users\Administrator\Downloads"
+PROJECT_EXPORT_DIR_SETTING_PREFIX = "project_default_export_dir:"
 ILLEGAL_WINDOWS_NAME_CHARS = set('<>:"/\\|?*')
 
 
@@ -150,9 +152,14 @@ def _trial_weight_path(run_dir: str) -> Path:
         raise ServiceError(f"no validation weight file found under run_dir: {run_dir}") from exc
 
 
-def _export_filename(model_name: str, model: str, task_type: str, imgsz: int) -> str:
-    del task_type
-    return f"{model_name}-{_model_stem(model)}-{int(imgsz)}.onnx"
+def _export_filename(model_name: str) -> str:
+    if model_name.lower().endswith(".onnx"):
+        return model_name
+    return f"{model_name}.onnx"
+
+
+def _project_export_dir_setting_key(project: str) -> str:
+    return f"{PROJECT_EXPORT_DIR_SETTING_PREFIX}{project}"
 
 
 def _default_python_candidates() -> list[str]:
@@ -406,6 +413,88 @@ class OrchestratorService:
             self.repo.set_setting(YOLO_PYTHON_SETTING_KEY, normalized)
         return self.get_settings()
 
+    def _project_default_export_dir(self, project: str) -> str:
+        configured = self.repo.get_setting(_project_export_dir_setting_key(project), "").strip()
+        return configured or DEFAULT_EXPORT_DIR
+
+    def get_project_settings(self, project: str) -> dict[str, Any]:
+        normalized_project = str(project or "").strip() or default_project_name("")
+        experiments = [config for config in self.repo.list_experiments() if config.project == normalized_project]
+        if not experiments:
+            raise ServiceError(f"project not found: {normalized_project}")
+        return {
+            "project": normalized_project,
+            "default_export_dir": self._project_default_export_dir(normalized_project),
+            "experiment_count": len(experiments),
+        }
+
+    def update_project_settings(
+        self,
+        project: str,
+        *,
+        name: str | None = None,
+        default_export_dir: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_project = str(project or "").strip() or default_project_name("")
+        experiments = [config for config in self.repo.list_experiments() if config.project == normalized_project]
+        if not experiments:
+            raise ServiceError(f"project not found: {normalized_project}")
+
+        next_project = normalized_project
+        if name is not None:
+            next_project = str(name or "").strip()
+            if not next_project:
+                raise ServiceError("project name cannot be empty")
+
+        if next_project != normalized_project:
+            for config in experiments:
+                self.repo.update_experiment(config.experiment_id, project=next_project)
+                experiment_json = Path(config.save_root) / "experiments" / config.experiment_id / EXPERIMENT_FILENAME
+                if experiment_json.exists():
+                    config.project = next_project
+                    write_json(experiment_json, config.to_dict())
+                self.repo.add_event(
+                    config.experiment_id,
+                    "EXPERIMENT_UPDATED",
+                    {"description": config.description, "project": next_project},
+                )
+
+        export_dir = self._project_default_export_dir(normalized_project)
+        if default_export_dir is not None:
+            export_dir = str(default_export_dir or "").strip() or DEFAULT_EXPORT_DIR
+        if next_project != normalized_project:
+            self.repo.set_setting(_project_export_dir_setting_key(normalized_project), "")
+        self.repo.set_setting(_project_export_dir_setting_key(next_project), export_dir)
+
+        return {
+            "project": next_project,
+            "previous_project": normalized_project,
+            "default_export_dir": export_dir,
+            "experiment_count": len(experiments),
+        }
+
+    def delete_project(self, project: str, *, confirmation: str) -> dict[str, Any]:
+        normalized_project = str(project or "").strip() or default_project_name("")
+        if confirmation != "确认删除":
+            raise ServiceError("confirmation text must be 确认删除")
+        experiments = [config for config in self.repo.list_experiments() if config.project == normalized_project]
+        if not experiments:
+            raise ServiceError(f"project not found: {normalized_project}")
+
+        results = [
+            self.delete_task(config.experiment_id, keep_files=False, force=True)
+            for config in experiments
+        ]
+        self.repo.set_setting(_project_export_dir_setting_key(normalized_project), "")
+        return {
+            "project": normalized_project,
+            "deleted": True,
+            "deleted_experiments": len(results),
+            "deleted_trials": sum(int(result.get("deleted_trials", 0)) for result in results),
+            "files_deleted": any(bool(result.get("files_deleted")) for result in results),
+            "results": results,
+        }
+
     def list_remote_servers(self) -> dict[str, Any]:
         return {
             "remote_servers": [
@@ -578,6 +667,7 @@ class OrchestratorService:
                     "dataset_root": config.dataset_root,
                     "dataset_yaml": config.dataset_yaml,
                     "pretrained_model": config.pretrained_model,
+                    "default_export_dir": self._project_default_export_dir(config.project),
                     "goal": config.goal.__dict__,
                     "trial_count": len(trials),
                     "best_metric": best_trial_info,
@@ -604,6 +694,7 @@ class OrchestratorService:
             "trial_count": len(trials),
             "latest_params": self._latest_params(config, trials),
             "default_model": config.pretrained_model,
+            "default_export_dir": self._project_default_export_dir(config.project),
             "search_space": config.search_space,
             "trials": [self._trial_row(trial) for trial in trials],
         }
@@ -1067,6 +1158,8 @@ class OrchestratorService:
             "trial_id": trial.trial_id,
             "display_name": trial.display_name,
             "experiment_id": trial.experiment_id,
+            "project": config.project,
+            "default_export_dir": self._project_default_export_dir(config.project),
             "task_type": config.task_type,
             "iteration": trial.iteration,
             "status": trial.status,
@@ -1140,7 +1233,7 @@ class OrchestratorService:
             raise ServiceError(f"invalid imgsz for trial {trial_id}: {trial.params.get('imgsz')}")
 
         weight_path = _export_weight_path(trial.run_dir)
-        output_filename = _export_filename(normalized_model_name, trial.model, config.task_type, imgsz)
+        output_filename = _export_filename(normalized_model_name)
         output_path = Path(normalized_output_dir) / output_filename
         if output_path.exists():
             raise ServiceError(f"target file already exists: {output_path}")

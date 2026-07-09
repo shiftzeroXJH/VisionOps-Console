@@ -12,6 +12,7 @@ export type Experiment = {
   dataset_root: string;
   dataset_yaml?: string;
   pretrained_model: string;
+  default_export_dir?: string;
   goal: MetricGoal;
   trial_count: number;
   best_metric?: {
@@ -109,6 +110,32 @@ export const api = {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async getProjectSettings(project: string) {
+    const res = await fetch(`/api/projects/${encodeURIComponent(project)}`);
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async updateProjectSettings(project: string, payload: { name?: string; default_export_dir?: string }) {
+    const res = await fetch(`/api/projects/${encodeURIComponent(project)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async deleteProject(project: string, confirmation: string) {
+    const res = await fetch(`/api/projects/${encodeURIComponent(project)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmation })
     });
     if (!res.ok) await safeThrowError(res);
     return res.json();

@@ -59,7 +59,6 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
   const datasetClasses = Array.isArray(datasetAnalysis.classes) ? datasetAnalysis.classes : []
   const datasetWarnings = Array.isArray(datasetAnalysis.warnings) ? datasetAnalysis.warnings : []
   const isRemote = trial.source === 'remote_sftp'
-  const architecture = String(trial.model_display || trial.model || 'model').replace(/\.pt$/i, '')
   const displayName = trial.display_name || trial.trial_id || trialId
 
   const saveTrialName = async () => {
@@ -291,7 +290,7 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
           trialId={trialId}
           modelStem={displayName}
           imgsz={Number(trial.imgsz || data?.params?.imgsz || 0)}
-          architecture={architecture}
+          defaultOutputDir={trial.default_export_dir}
           onClose={() => setShowExportDialog(false)}
         />
       )}

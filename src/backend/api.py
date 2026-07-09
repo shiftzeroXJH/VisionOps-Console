@@ -110,6 +110,33 @@ def create_experiment(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+@app.get("/api/projects/{project}")
+def get_project_settings(project: str) -> dict[str, Any]:
+    return _invoke_sync("get-project-settings", lambda: service.get_project_settings(project))
+
+
+@app.patch("/api/projects/{project}")
+def update_project_settings(project: str, payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload or {})
+    return _invoke_sync(
+        "update-project-settings",
+        lambda: service.update_project_settings(
+            project,
+            name=body.get("name"),
+            default_export_dir=body.get("default_export_dir"),
+        ),
+    )
+
+
+@app.delete("/api/projects/{project}")
+def delete_project(project: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    body = dict(payload or {})
+    return _invoke_sync(
+        "delete-project",
+        lambda: service.delete_project(project, confirmation=str(body.get("confirmation", ""))),
+    )
+
+
 @app.get("/api/experiments/{experiment_id}")
 def get_experiment(experiment_id: str) -> dict[str, Any]:
     return _invoke_sync("get-experiment", lambda: service.get_experiment_detail(experiment_id))

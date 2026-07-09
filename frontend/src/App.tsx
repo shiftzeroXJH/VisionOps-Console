@@ -19,9 +19,12 @@ function App() {
   const loadExperiments = useCallback(async () => {
     try {
       const data = await api.getExperiments()
-      setExperiments(data.experiments || [])
-      if (data.experiments?.length > 0 && !activeIdRef.current) {
-        setActiveExperimentId(data.experiments[0].experiment_id)
+      const nextExperiments = data.experiments || []
+      setExperiments(nextExperiments)
+      if (nextExperiments.length === 0) {
+        setActiveExperimentId(null)
+      } else if (!activeIdRef.current || !nextExperiments.some((experiment) => experiment.experiment_id === activeIdRef.current)) {
+        setActiveExperimentId(nextExperiments[0].experiment_id)
       }
     } catch (err) {
       console.error('Error loading experiments:', err)

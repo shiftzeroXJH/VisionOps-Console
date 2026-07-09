@@ -5,16 +5,16 @@ interface Props {
   trialId: string
   modelStem: string
   imgsz: number
-  architecture: string
+  defaultOutputDir?: string
   onClose: () => void
 }
 
 const DEFAULT_OUTPUT_DIR = 'C:\\Users\\Administrator\\Downloads'
 const ILLEGAL_NAME_PATTERN = /[<>:"/\\|?*\u0000-\u001f]/
 
-export function ExportOnnxDialog({ trialId, modelStem, imgsz, architecture, onClose }: Props) {
+export function ExportOnnxDialog({ trialId, modelStem, imgsz, defaultOutputDir, onClose }: Props) {
   const [modelName, setModelName] = useState(modelStem)
-  const [outputDir, setOutputDir] = useState(DEFAULT_OUTPUT_DIR)
+  const [outputDir, setOutputDir] = useState(defaultOutputDir?.trim() || DEFAULT_OUTPUT_DIR)
   const [submitting, setSubmitting] = useState(false)
 
   const validationError = useMemo(() => {
@@ -26,11 +26,6 @@ export function ExportOnnxDialog({ trialId, modelStem, imgsz, architecture, onCl
     if (!Number.isFinite(imgsz) || imgsz <= 0) return '当前 Trial 缺少有效的 imgsz，无法导出'
     return ''
   }, [imgsz, modelName, outputDir])
-
-  const previewName = useMemo(() => {
-    const normalized = modelName.trim() || '模型名字'
-    return `${normalized}-${architecture}-${imgsz}.onnx`
-  }, [architecture, imgsz, modelName])
 
   const handleExport = async () => {
     if (validationError) {
@@ -83,10 +78,6 @@ export function ExportOnnxDialog({ trialId, modelStem, imgsz, architecture, onCl
               disabled={submitting}
             />
           </label>
-          <div className="card" style={{ padding: '0.75rem', backgroundColor: 'rgba(255,255,255,0.45)' }}>
-            <div className="text-muted" style={{ fontSize: '0.75rem' }}>文件名预览</div>
-            <div style={{ marginTop: '0.25rem', wordBreak: 'break-all', fontFamily: 'monospace' }}>{previewName}</div>
-          </div>
           {validationError && <div className="text-danger" style={{ fontSize: '0.85rem' }}>{validationError}</div>}
         </div>
         <div className="flex justify-end gap-2 pt-4" style={{ marginTop: '1rem', borderTop: '1px solid var(--panel-border)' }}>

@@ -1,7 +1,7 @@
 import { type Experiment } from '../api'
 import { api } from '../api'
 import { clsx } from 'clsx'
-import { Check, ChevronDown, ChevronRight, Edit2, Search, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Search, Settings, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
 interface Props {
@@ -55,9 +55,7 @@ const tokenTextForExperiment = (experiment: Experiment) => {
 export function ExperimentList({ experiments, activeId, onSelect, onExperimentUpdated }: Props) {
   const [query, setQuery] = useState('')
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({})
-  const [editingProject, setEditingProject] = useState<string | null>(null)
-  const [projectValue, setProjectValue] = useState('')
-  const [savingProject, setSavingProject] = useState(false)
+  const [settingsProject, setSettingsProject] = useState<string | null>(null)
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -110,47 +108,6 @@ export function ExperimentList({ experiments, activeId, onSelect, onExperimentUp
     setExpandedProjects((current) => ({ ...current, [project]: !current[project] }))
   }
 
-  const startProjectEdit = (project: string) => {
-    setEditingProject(project)
-    setProjectValue(project)
-  }
-
-  const cancelProjectEdit = () => {
-    setEditingProject(null)
-    setProjectValue('')
-  }
-
-  const saveProject = async (group: ExperimentGroup) => {
-    const nextProject = projectValue.trim()
-    if (!nextProject) {
-      alert('项目名称不能为空')
-      return
-    }
-    if (nextProject === group.project) {
-      cancelProjectEdit()
-      return
-    }
-
-    setSavingProject(true)
-    try {
-      await Promise.all(group.experiments.map((experiment) => (
-        api.updateExperiment(experiment.experiment_id, { project: nextProject })
-      )))
-      setExpandedProjects((current) => {
-        const next = { ...current, [nextProject]: true }
-        delete next[group.project]
-        return next
-      })
-      setEditingProject(null)
-      setProjectValue('')
-      onExperimentUpdated?.()
-    } catch (err: any) {
-      alert(err?.detail?.error || '修改项目失败')
-    } finally {
-      setSavingProject(false)
-    }
-  }
-
   if (experiments.length === 0) {
     return (
       <div className="p-4" style={{ color: 'var(--text-muted)', fontSize: '0.875rem', textAlign: 'center' }}>
@@ -182,36 +139,13 @@ export function ExperimentList({ experiments, activeId, onSelect, onExperimentUp
                   <button type="button" className="experiment-project-chevron" onClick={() => toggleProject(group.project)} title={isOpen ? '折叠项目' : '展开项目'}>
                     {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                   </button>
-                  {editingProject === group.project ? (
-                    <div className="experiment-project-editor">
-                      <input
-                        className="input"
-                        value={projectValue}
-                        onChange={(event) => setProjectValue(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') saveProject(group)
-                          if (event.key === 'Escape') cancelProjectEdit()
-                        }}
-                        autoFocus
-                      />
-                      <button className="btn btn-primary experiment-project-action" onClick={() => saveProject(group)} disabled={savingProject} title="保存项目名">
-                        <Check size={14} />
-                      </button>
-                      <button className="btn experiment-project-action" onClick={cancelProjectEdit} disabled={savingProject} title="取消">
-                        <X size={14} />
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <button type="button" className="experiment-project-name" onClick={() => toggleProject(group.project)} title={isOpen ? '折叠项目' : '展开项目'}>
-                        {group.project}
-                      </button>
-                      <span className="experiment-project-count">{group.experiments.length}</span>
-                      <button type="button" className="btn experiment-project-action" onClick={() => startProjectEdit(group.project)} title="修改项目名">
-                        <Edit2 size={13} />
-                      </button>
-                    </>
-                  )}
+                  <button type="button" className="experiment-project-name" onClick={() => toggleProject(group.project)} title={isOpen ? '折叠项目' : '展开项目'}>
+                    {group.project}
+                  </button>
+                  <span className="experiment-project-count">{group.experiments.length}</span>
+                  <button type="button" className="btn experiment-project-action" onClick={() => setSettingsProject(group.project)} title="项目设置">
+                    <Settings size={13} />
+                  </button>
                 </div>
 
                 {isOpen && group.experiments.map((exp) => (
@@ -259,6 +193,181 @@ export function ExperimentList({ experiments, activeId, onSelect, onExperimentUp
           })}
         </div>
       )}
+      {settingsProject && (
+        <ProjectSettingsDialog
+          project={settingsProject}
+          experiments={experiments.filter((experiment) => projectName(experiment) === settingsProject)}
+          onClose={() => setSettingsProject(null)}
+          onSaved={(nextProject) => {
+            setExpandedProjects((current) => {
+              const next = { ...current, [nextProject]: true }
+              if (nextProject !== settingsProject) delete next[settingsProject]
+              return next
+            })
+            setSettingsProject(null)
+            onExperimentUpdated?.()
+          }}
+          onDeleted={() => {
+            setSettingsProject(null)
+            onExperimentUpdated?.()
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+function ProjectSettingsDialog({
+  project,
+  experiments,
+  onClose,
+  onSaved,
+  onDeleted,
+}: {
+  project: string
+  experiments: Experiment[]
+  onClose: () => void
+  onSaved: (project: string) => void
+  onDeleted: () => void
+}) {
+  const [name, setName] = useState(project)
+  const [defaultExportDir, setDefaultExportDir] = useState(experiments[0]?.default_export_dir || 'C:\\Users\\Administrator\\Downloads')
+  const [confirmation, setConfirmation] = useState('')
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    api.getProjectSettings(project)
+      .then((settings) => {
+        if (cancelled) return
+        setName(settings.project || project)
+        setDefaultExportDir(settings.default_export_dir || 'C:\\Users\\Administrator\\Downloads')
+      })
+      .catch((err: any) => {
+        if (!cancelled) alert(err?.detail?.error || '加载项目设置失败')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [project])
+
+  const save = async () => {
+    const nextName = name.trim()
+    if (!nextName) {
+      alert('项目名称不能为空')
+      return
+    }
+    setSaving(true)
+    try {
+      const result = await api.updateProjectSettings(project, {
+        name: nextName,
+        default_export_dir: defaultExportDir.trim(),
+      })
+      onSaved(result.project || nextName)
+    } catch (err: any) {
+      alert(err?.detail?.error || '保存项目设置失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const deleteProject = async () => {
+    if (confirmation !== '确认删除') {
+      alert('请输入“确认删除”后再删除项目')
+      return
+    }
+    setDeleting(true)
+    try {
+      await api.deleteProject(project, confirmation)
+      onDeleted()
+    } catch (err: any) {
+      alert(err?.detail?.error || '删除项目失败')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const busy = loading || saving || deleting
+
+  return (
+    <>
+      <div className="dialog-overlay" onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose() }}>
+        <div className="card dialog-card settings-dialog">
+          <div className="settings-header">
+            <div>
+              <div className="settings-kicker">PROJECT</div>
+              <h2>项目设置</h2>
+            </div>
+            <button className="btn" onClick={onClose} disabled={busy}>关闭</button>
+          </div>
+
+          <div className="settings-section settings-section-stack">
+            <label className="settings-form-block">
+              <span>项目名称</span>
+              <input className="input" value={name} onChange={(event) => setName(event.target.value)} disabled={busy} />
+            </label>
+            <label className="settings-form-block">
+              <span>默认模型导出路径</span>
+              <input
+                className="input"
+                value={defaultExportDir}
+                onChange={(event) => setDefaultExportDir(event.target.value)}
+                placeholder="C:\\Users\\Administrator\\Downloads"
+                disabled={busy}
+              />
+            </label>
+            <div className="text-muted" style={{ fontSize: '0.8rem' }}>该项目下共有 {experiments.length} 个任务。</div>
+            <div className="flex justify-end gap-2">
+              <button className="btn btn-danger" onClick={() => setShowDeleteConfirm(true)} disabled={busy}>
+                <Trash2 size={16} /> 删除项目
+              </button>
+              <button className="btn btn-primary" onClick={save} disabled={busy}>
+                {saving ? '保存中...' : '保存设置'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {showDeleteConfirm && (
+        <div className="dialog-overlay" onClick={(event) => { if (event.target === event.currentTarget && !deleting) setShowDeleteConfirm(false) }}>
+          <div className="card dialog-card settings-dialog" style={{ borderColor: 'rgba(239,68,68,0.45)' }}>
+            <div className="settings-header">
+              <div>
+                <div className="settings-kicker">DANGER</div>
+                <h2 className="text-danger">删除项目</h2>
+              </div>
+              <button className="btn" onClick={() => setShowDeleteConfirm(false)} disabled={deleting}>关闭</button>
+            </div>
+            <p className="text-muted" style={{ fontSize: '0.9rem' }}>
+              会删除“{project}”下所有任务记录、Trial 记录和训练结果 runs 文件。
+            </p>
+            <label className="settings-form-block">
+              <span>输入“确认删除”</span>
+              <input
+                className="input"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                disabled={deleting}
+                autoFocus
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button className="btn" onClick={() => setShowDeleteConfirm(false)} disabled={deleting}>取消</button>
+              <button className="btn btn-danger" onClick={deleteProject} disabled={deleting || confirmation !== '确认删除'}>
+                {deleting ? '删除中...' : '确定删除'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
