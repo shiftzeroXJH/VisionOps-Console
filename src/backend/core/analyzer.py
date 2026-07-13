@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 from typing import Any
 
+from backend.constants import PER_CLASS_METRICS_FILENAME
 from backend.models import Summary
 
 
@@ -102,6 +103,21 @@ def _normalize_metric_set(metrics: dict[str, float | None]) -> dict[str, float]:
         key: round(float(value or 0.0), 6)
         for key, value in metrics.items()
     }
+
+
+def _load_per_class_metrics(run_path: Path) -> list[dict[str, Any]]:
+    metrics_path = run_path / PER_CLASS_METRICS_FILENAME
+    if not metrics_path.exists():
+        return []
+    try:
+        import json
+
+        raw_metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(raw_metrics, list):
+        return []
+    return [item for item in raw_metrics if isinstance(item, dict)]
 
 
 def _loss_trend(rows: list[dict[str, Any]], loss_names: tuple[str, ...]) -> str:
@@ -257,6 +273,7 @@ def build_summary(
             "map50": round(float(primary_metrics.get("map50") or 0.0), 6),
             "map50_95": round(float(primary_metrics.get("map50_95") or 0.0), 6),
         },
+        per_class_metrics=_load_per_class_metrics(run_path),
         metric_breakdown=metric_breakdown,
         delta_vs_prev=delta_vs_prev,
         metric_breakdown_delta_vs_prev=metric_breakdown_delta_vs_prev,
@@ -274,4 +291,3 @@ def build_summary(
         },
         params=params,
     )
-

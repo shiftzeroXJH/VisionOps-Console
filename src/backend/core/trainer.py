@@ -50,6 +50,7 @@ def run_training(
     trial_name: str,
     params: dict[str, Any],
     *,
+    task_type: str = "detection",
     python_executable: str | None = None,
     src_root: str | None = None,
     process_key: str | None = None,
@@ -69,6 +70,7 @@ def run_training(
                 "run_dir": str(run_path),
                 "trial_name": trial_name,
                 "params": params,
+                "task_type": task_type,
             }
         ),
         encoding="utf-8",

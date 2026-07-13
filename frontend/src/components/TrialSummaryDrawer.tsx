@@ -172,6 +172,37 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                       </div>
                     ))}
                   </div>
+                  {data.per_class_metrics?.length > 0 ? (
+                    <div className="table-wrapper">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>class id</th>
+                            <th>class name</th>
+                            <th>Precision</th>
+                            <th>Recall</th>
+                            <th>mAP50</th>
+                            <th>mAP50-95</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...data.per_class_metrics]
+                            .sort((left: any, right: any) => left.class_id - right.class_id)
+                            .map((item: any) => (
+                              <tr key={item.class_id}>
+                                <td>{item.class_id}</td>
+                                <td>{item.class_name}</td>
+                                {['precision', 'recall', 'map50', 'map50_95'].map((key) => (
+                                  <td key={key}>{typeof item[key] === 'number' ? item[key].toFixed(4) : '-'}</td>
+                                ))}
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="text-muted" style={{ fontSize: '0.8rem' }}>暂无类别指标</div>
+                  )}
                 </section>
 
                 <section className="flex-col gap-2">

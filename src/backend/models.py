@@ -81,6 +81,7 @@ class Summary:
     basic_info: dict[str, Any]
     metric_context: dict[str, Any]
     final_metrics: dict[str, Any]
+    per_class_metrics: list[dict[str, Any]]
     metric_breakdown: dict[str, Any]
     delta_vs_prev: dict[str, Any]
     metric_breakdown_delta_vs_prev: dict[str, Any]

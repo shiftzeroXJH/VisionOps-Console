@@ -274,6 +274,7 @@ def _compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
     return {
         "metric_context": summary.get("metric_context", {}),
         "final_metrics": summary.get("final_metrics", {}),
+        "per_class_metrics": summary.get("per_class_metrics", []),
         "metric_breakdown": summary.get("metric_breakdown", {}),
         "delta_vs_prev": summary.get("delta_vs_prev", {}),
         "metric_breakdown_delta_vs_prev": summary.get("metric_breakdown_delta_vs_prev", {}),
@@ -1031,6 +1032,7 @@ class OrchestratorService:
                 run_dir=str(trial_dir),
                 trial_name=display_name,
                 params=trial_params,
+                task_type=config.task_type,
                 python_executable=self._python_for_yolo(),
                 src_root=str(Path(__file__).resolve().parent.parent),
                 process_key=experiment_id,
@@ -1113,6 +1115,7 @@ class OrchestratorService:
             summary: dict[str, Any] = {
                 "trial_id": trial_id,
                 "final_metrics": {},
+                "per_class_metrics": [],
                 "metric_breakdown": {},
                 "delta_vs_prev": {},
                 "metric_breakdown_delta_vs_prev": {},
@@ -1147,6 +1150,7 @@ class OrchestratorService:
                 "logs": logs,
                 "metric_context": summary.get("metric_context", {}),
                 "final_metrics": summary.get("final_metrics", {}),
+                "per_class_metrics": summary.get("per_class_metrics", []),
                 "metric_breakdown": summary.get("metric_breakdown", {}),
                 "delta_vs_prev": summary.get("delta_vs_prev", {}),
                 "metric_breakdown_delta_vs_prev": summary.get("metric_breakdown_delta_vs_prev", {}),
