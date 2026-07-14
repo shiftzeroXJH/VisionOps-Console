@@ -65,6 +65,15 @@ YOLO_PYTHON_SETTING_KEY = "yolo_python"
 DEFAULT_EXPORT_DIR = r"C:\Users\Administrator\Downloads"
 PROJECT_EXPORT_DIR_SETTING_PREFIX = "project_default_export_dir:"
 ILLEGAL_WINDOWS_NAME_CHARS = set('<>:"/\\|?*')
+PLATFORM_CONTROLLED_YOLO_PARAMS = frozenset(
+    {
+        "model", "data", "task", "mode", "project", "name", "save_dir", "exist_ok",
+        "device", "cache", "seed", "deterministic", "pretrained", "plots", "save",
+        "save_period", "save_conf", "save_crop", "save_frames", "save_json", "save_txt",
+        "show", "visualize", "resume", "val", "verbose",
+    }
+)
+_YOLO_PARAM_SCHEMA_CACHE: dict[str, dict[str, dict[str, str]]] = {}
 
 
 def _parse_scalar_yaml_value(raw_value: str) -> Any:
@@ -78,6 +87,11 @@ def _parse_scalar_yaml_value(raw_value: str) -> Any:
         return lowered == "true"
     if lowered in {"null", "none", "~"}:
         return None
+    if value.startswith(("[", "{")):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            pass
     try:
         if any(char in value for char in (".", "e", "E")):
             return float(value)
@@ -219,10 +233,10 @@ def _directory_size(path: Path) -> tuple[int, int]:
     return total_files, total_bytes
 
 
-def _params_from_args(args: dict[str, Any]) -> dict[str, Any]:
+def _params_from_args(args: dict[str, Any], allowed_extra_params: set[str] | None = None) -> dict[str, Any]:
     return {
         key: args[key]
-        for key in SEARCH_SPACE
+        for key in set(SEARCH_SPACE) | (allowed_extra_params or set())
         if key in args and args[key] is not None
     }
 
@@ -340,6 +354,60 @@ class OrchestratorService:
                 self._migrate_legacy_db_if_needed(old_repo_path, new_repo_path)
         self.repo = Repository(repo_path)
         self._bootstrap_python_setting()
+
+    def _yolo_param_schema(self) -> dict[str, dict[str, str]]:
+        python_executable = self._python_for_yolo()
+        cached = _YOLO_PARAM_SCHEMA_CACHE.get(python_executable)
+        if cached is not None:
+            return cached
+        src_root = str(Path(__file__).resolve().parent.parent)
+        env = dict(os.environ)
+        env["PYTHONPATH"] = src_root if not env.get("PYTHONPATH") else f"{src_root}{os.pathsep}{env['PYTHONPATH']}"
+        try:
+            result = subprocess.run(
+                [python_executable, "-m", "backend.core.yolo_schema_worker"],
+                capture_output=True,
+                check=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                timeout=15,
+            )
+            raw_schema = json.loads(result.stdout)
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+            raise ServiceError(f"failed to load Ultralytics parameter schema: {exc}") from exc
+        if not isinstance(raw_schema, dict):
+            raise ServiceError("failed to load Ultralytics parameter schema")
+        schema = {
+            str(name): {"type": str(spec.get("type", "json"))}
+            for name, spec in raw_schema.items()
+            if isinstance(name, str) and isinstance(spec, dict)
+        }
+        _YOLO_PARAM_SCHEMA_CACHE[python_executable] = schema
+        return schema
+
+    def _extra_param_schema(self) -> dict[str, dict[str, str]]:
+        return {
+            name: spec
+            for name, spec in self._yolo_param_schema().items()
+            if name not in SEARCH_SPACE and name not in PLATFORM_CONTROLLED_YOLO_PARAMS
+        }
+
+    def _validate_extra_param_value(self, name: str, value: Any, expected_type: str) -> Any:
+        try:
+            json.dumps(value, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid JSON value for '{name}'") from exc
+        if expected_type == "boolean" and not isinstance(value, bool):
+            raise ValueError(f"invalid boolean value for '{name}'")
+        if expected_type == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ValueError(f"invalid integer value for '{name}'")
+        if expected_type == "number" and (isinstance(value, bool) or not isinstance(value, (int, float))):
+            raise ValueError(f"invalid number value for '{name}'")
+        if expected_type == "string" and not isinstance(value, str):
+            raise ValueError(f"invalid string value for '{name}'")
+        return value
 
     def _migrate_legacy_db_if_needed(self, old_repo_path: Path, new_repo_path: Path) -> None:
         if not old_repo_path.exists():
@@ -756,6 +824,8 @@ class OrchestratorService:
             "default_model": config.pretrained_model,
             "editable_schema": self._editable_schema(merged_search_space),
             "search_space": merged_search_space,
+            "extra_param_schema": self._extra_param_schema(),
+            "protected_extra_params": sorted(PLATFORM_CONTROLLED_YOLO_PARAMS),
         }
 
     def validate_params(
@@ -775,8 +845,15 @@ class OrchestratorService:
         normalized: dict[str, Any] = {}
         errors: dict[str, str] = {}
         warnings: list[str] = []
+        has_extra_candidates = any(
+            key not in SEARCH_SPACE and key not in PLATFORM_CONTROLLED_YOLO_PARAMS
+            for key in candidate
+        )
+        extra_schema = self._extra_param_schema() if has_extra_candidates else {}
         for key in candidate:
-            if key not in SEARCH_SPACE:
+            if key in PLATFORM_CONTROLLED_YOLO_PARAMS:
+                errors[key] = "parameter is controlled by the platform"
+            elif key not in SEARCH_SPACE and key not in extra_schema:
                 errors[key] = "unsupported parameter"
         for key in SEARCH_SPACE:
             if key not in candidate:
@@ -784,6 +861,13 @@ class OrchestratorService:
                 continue
             try:
                 normalized[key] = validate_param_value(key, candidate[key])
+            except ValueError as exc:
+                errors[key] = str(exc)
+        for key, value in candidate.items():
+            if key not in extra_schema:
+                continue
+            try:
+                normalized[key] = self._validate_extra_param_value(key, value, extra_schema[key]["type"])
             except ValueError as exc:
                 errors[key] = str(exc)
         if int(normalized.get("workers", 1) or 0) == 0:
@@ -1401,7 +1485,7 @@ class OrchestratorService:
         raw_params = params
         params_source = "manual" if params is not None else "latest"
         if raw_params is None and args_data:
-            raw_params = _params_from_args(args_data)
+            raw_params = _params_from_args(args_data, set(self._extra_param_schema()))
             params_source = "args_yaml"
         elif raw_params is None and config_path.exists():
             raw_params = read_json(config_path)
@@ -1411,7 +1495,7 @@ class OrchestratorService:
             merged_params = dict(base_params)
             merged_params.update(raw_params)
             raw_params = merged_params
-            if params_source == "args_yaml" and set(raw_params) != set(_params_from_args(args_data)):
+            if params_source == "args_yaml" and set(raw_params) != set(_params_from_args(args_data, set(self._extra_param_schema()))):
                 params_source = "args_yaml_partial"
         validation = self.validate_params(experiment_id, params=raw_params or self._latest_params(config, self.repo.list_trials(experiment_id)))
         if not validation["valid"]:
@@ -1505,7 +1589,7 @@ class OrchestratorService:
             raise ServiceError("args.yaml does not contain model")
 
         base_params = self._latest_params(config, self.repo.list_trials(experiment_id))
-        parsed_params = _params_from_args(args_data)
+        parsed_params = _params_from_args(args_data, set(self._extra_param_schema()))
         merged_params = dict(base_params)
         merged_params.update(parsed_params)
         validation = self.validate_params(experiment_id, params=merged_params)
