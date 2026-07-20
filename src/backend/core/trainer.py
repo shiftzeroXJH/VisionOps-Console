@@ -11,9 +11,6 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from backend.utils import local_weights_dir
-
-
 class TrainingError(RuntimeError):
     pass
 
@@ -126,7 +123,7 @@ def run_training(
 
 
 def _prepare_amp_check_weight(run_path: Path) -> None:
-    source = local_weights_dir() / "yolo26n.pt"
+    source = _package_models_dir() / "yolo26n.pt"
     target = run_path / "yolo26n.pt"
     if not source.exists() or target.exists():
         return
@@ -134,6 +131,10 @@ def _prepare_amp_check_weight(run_path: Path) -> None:
         os.link(source, target)
     except OSError:
         shutil.copy2(source, target)
+
+
+def _package_models_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "models"
 
 
 def _register_training_process(process_key: str, process: subprocess.Popen[str]) -> None:
