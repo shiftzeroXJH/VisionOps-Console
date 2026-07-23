@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Activity, Check, Edit2, FolderInput, RadioTower, Square, Trash2, X, Settings2 } from 'lucide-react'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api'
+import { getCurveColumns, getDefaultCurveMetrics, getMetricSuffix } from '../curveMetrics'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DeleteDialog } from './DeleteDialog'
 import { ExperimentCurvesDialog } from './ExperimentCurvesDialog'
@@ -24,17 +25,6 @@ const CANCELLABLE_STATUSES = new Set([
 ])
 
 const CHART_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6']
-
-const SUMMARY_METRICS = [
-  { key: 'metrics/mAP50-95(B)', label: 'Box mAP50-95' },
-  { key: 'metrics/mAP50(B)', label: 'Box mAP50' },
-  { key: 'metrics/recall(B)', label: 'Recall' },
-  { key: 'metrics/precision(B)', label: 'Precision' },
-  { key: 'train/box_loss', label: 'Train Box Loss' },
-  { key: 'train/cls_loss', label: 'Train Class Loss' },
-  { key: 'val/box_loss', label: 'Val Box Loss' },
-  { key: 'val/cls_loss', label: 'Val Class Loss' },
-]
 
 type YAxisMode = 'overview' | 'tail'
 
@@ -81,6 +71,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
   const [isCancelling, setIsCancelling] = useState(false)
   const [showParameterDrawer, setShowParameterDrawer] = useState(false)
   const [chartData, setChartData] = useState<any[]>([])
+  const [curveColumns, setCurveColumns] = useState<string[]>([])
   const [trialIds, setTrialIds] = useState<string[]>([])
   const [trialLabels, setTrialLabels] = useState<Record<string, string>>({})
   const [showCurves, setShowCurves] = useState(false)
@@ -89,8 +80,8 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const [renaming, setRenaming] = useState(false)
-  const [summaryMetricA, setSummaryMetricA] = useState(SUMMARY_METRICS[0].key)
-  const [summaryMetricB, setSummaryMetricB] = useState(SUMMARY_METRICS[2].key)
+  const [summaryMetricA, setSummaryMetricA] = useState('')
+  const [summaryMetricB, setSummaryMetricB] = useState('')
   const [summaryYAxisMode, setSummaryYAxisMode] = useState<YAxisMode>('overview')
   const [hiddenSummaryTrials, setHiddenSummaryTrials] = useState<Set<string>>(new Set())
 
@@ -110,8 +101,13 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
       
       if (curvesData?.curves) {
         const topTrials = Object.keys(curvesData.curves).sort().reverse().slice(0, 5)
+        const columns = getCurveColumns(curvesData.curves)
+        const [defaultMap, defaultRecall] = getDefaultCurveMetrics(columns, det.experiment.task_type)
         setTrialIds(topTrials)
         setTrialLabels(curvesData.trial_labels || {})
+        setCurveColumns(columns)
+        setSummaryMetricA((current) => columns.includes(current) ? current : defaultMap)
+        setSummaryMetricB((current) => columns.includes(current) ? current : defaultRecall)
         const epochs = new Set<number>()
         Object.values(curvesData.curves).forEach((rows: any) => rows.forEach((row: any) => epochs.add(row.epoch)))
         const maxEpoch = Math.max(0, ...Array.from(epochs))
@@ -122,8 +118,8 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
           topTrials.forEach((trialId) => {
             const row = curvesData.curves[trialId].find((item: any) => item.epoch === epoch)
             if (row) {
-              SUMMARY_METRICS.forEach((metric) => {
-                if (typeof row[metric.key] === 'number') point[`${trialId}.${metric.key}`] = row[metric.key]
+              columns.forEach((column) => {
+                if (typeof row[column] === 'number') point[`${trialId}.${column}`] = row[column]
               })
             }
           })
@@ -132,6 +128,8 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
         setChartData(points)
       } else {
         setChartData([])
+        setCurveColumns([])
+        setTrialIds([])
         setTrialLabels({})
       }
     } finally {
@@ -199,7 +197,8 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
 
   const experiment = detail.experiment
   const canCancel = CANCELLABLE_STATUSES.has(experiment.status)
-  const summaryMetricMap = new Map(SUMMARY_METRICS.map((metric) => [metric.key, metric.label]))
+  const [defaultMapMetric] = getDefaultCurveMetrics(curveColumns, experiment.task_type)
+  const metricSuffix = getMetricSuffix(defaultMapMetric, experiment.task_type)
   const visibleSummaryTrialIds = trialIds.filter((trialId) => !hiddenSummaryTrials.has(trialId))
 
   const toggleSummaryTrial = (trialId: string) => {
@@ -255,12 +254,12 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
     <div className="inline-chart-card flex-1" style={{ height: 286, margin: 0, paddingBottom: 0 }}>
       <div className="flex items-center justify-between gap-2" style={{ marginBottom: '0.5rem', flexWrap: 'wrap' }}>
         <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>
-          {summaryMetricMap.get(metricKey) || metricKey} (最近 5 次 Trial)
+          {metricKey} (最近 5 次 Trial)
         </div>
         <div className="flex items-center gap-2">
           <select className="input" style={{ width: 190, height: 34, fontSize: '0.8rem' }} value={metricKey} onChange={(event) => setMetricKey(event.target.value)}>
-            {SUMMARY_METRICS.map((metric) => (
-              <option key={metric.key} value={metric.key}>{metric.label}</option>
+            {curveColumns.map((column) => (
+              <option key={column} value={column}>{column}</option>
             ))}
           </select>
           <button
@@ -375,6 +374,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
             {comparison ? (
               <TrialComparisonTable
                 data={comparison}
+                metricSuffix={metricSuffix}
                 onRowClick={setSelectedTrialId}
                 onRequestDeleteTrial={setTrialToDelete}
               />
@@ -459,7 +459,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
         />
       )}
 
-      {showCurves && <ExperimentCurvesDialog experimentId={experimentId} onClose={() => setShowCurves(false)} />}
+      {showCurves && <ExperimentCurvesDialog experimentId={experimentId} taskType={experiment.task_type} onClose={() => setShowCurves(false)} />}
     </div>
   )
 }

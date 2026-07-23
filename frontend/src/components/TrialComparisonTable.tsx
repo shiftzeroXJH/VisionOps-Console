@@ -2,11 +2,12 @@ import { CheckCircle2, CircleDashed, Loader2, Trash2, XCircle } from 'lucide-rea
 
 interface Props {
   data: any
+  metricSuffix: string
   onRowClick: (trialId: string) => void
   onRequestDeleteTrial: (trial: { trial_id: string; display_name?: string }) => void
 }
 
-export function TrialComparisonTable({ data, onRowClick, onRequestDeleteTrial }: Props) {
+export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequestDeleteTrial }: Props) {
   const sourceLabel = (source: string) => {
     switch (source) {
       case 'trained':
@@ -29,6 +30,17 @@ export function TrialComparisonTable({ data, onRowClick, onRequestDeleteTrial }:
     'map50_95', 'map50', 'delta_map50_95', 'precision', 'recall',
     'best_epoch', 'epochs_completed', 'imgsz', 'batch', 'lr0', 'patience',
   ]
+
+  const columnLabel = (key: string) => {
+    const labels: Record<string, string> = {
+      map50_95: `mAP50-95${metricSuffix}`,
+      map50: `mAP50${metricSuffix}`,
+      delta_map50_95: `Delta mAP50-95${metricSuffix}`,
+      precision: `Precision${metricSuffix}`,
+      recall: `Recall${metricSuffix}`,
+    }
+    return labels[key] || (key === 'display_name' ? 'Trial' : key.replace(/_/g, ' '))
+  }
 
   const formatValue = (val: any) => {
     if (val === undefined || val === null || val === '') return '-'
@@ -79,7 +91,7 @@ export function TrialComparisonTable({ data, onRowClick, onRequestDeleteTrial }:
       <table>
         <thead style={{ position: 'sticky', top: 0, zIndex: 10 }}>
           <tr>
-            {cols.map((col) => <th key={col}>{col === 'display_name' ? 'Trial' : col.replace(/_/g, ' ')}</th>)}
+            {cols.map((col) => <th key={col}>{columnLabel(col)}</th>)}
             <th>备注</th>
             <th>操作</th>
           </tr>

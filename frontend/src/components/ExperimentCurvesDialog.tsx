@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Activity, X } from 'lucide-react'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api'
+import { getCurveColumns, getDefaultCurveMetrics, type TaskType } from '../curveMetrics'
 
 interface Props {
   experimentId: string
+  taskType: TaskType
   onClose: () => void
 }
 
@@ -42,10 +44,12 @@ const getChartWindowData = (rows: any[], trialIds: string[], metricKey: string, 
   return rowsWithVisibleValues.slice(-Math.max(5, Math.ceil(rowsWithVisibleValues.length * 0.3)))
 }
 
-export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
+export function ExperimentCurvesDialog({ experimentId, taskType, onClose }: Props) {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [selectedTrials, setSelectedTrials] = useState<Set<string>>(new Set())
+  const [selectedMetricA, setSelectedMetricA] = useState('')
+  const [selectedMetricB, setSelectedMetricB] = useState('')
   const [yAxisMode, setYAxisMode] = useState<YAxisMode>('overview')
 
   useEffect(() => {
@@ -55,12 +59,15 @@ export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
         const res = await api.getExperimentCurves(experimentId)
         setData(res)
         setSelectedTrials(new Set(Object.keys(res.curves || {}).sort().reverse().slice(0, 5)))
+        const [defaultMap, defaultRecall] = getDefaultCurveMetrics(getCurveColumns(res.curves), taskType)
+        setSelectedMetricA(defaultMap)
+        setSelectedMetricB(defaultRecall)
       } finally {
         setLoading(false)
       }
     }
     fetchCurves().catch(console.error)
-  }, [experimentId])
+  }, [experimentId, taskType])
 
   const toggleTrial = (trialId: string) => {
     const next = new Set(selectedTrials)
@@ -71,6 +78,7 @@ export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
 
   const trialIds = useMemo(() => Object.keys(data?.curves || {}).sort(), [data])
   const trialLabels = useMemo(() => data?.trial_labels || {}, [data])
+  const curveColumns = useMemo(() => getCurveColumns(data?.curves), [data])
 
   const colorMap = useMemo(() => {
     const map = new Map<string, string>()
@@ -95,16 +103,6 @@ export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
     return points
   }, [data])
 
-  const metrics = [
-    { key: 'metrics/mAP50-95(B)', label: 'Box mAP50-95' },
-    { key: 'metrics/mAP50(B)', label: 'Box mAP50' },
-    { key: 'metrics/recall(B)', label: 'Recall' },
-    { key: 'metrics/precision(B)', label: 'Precision' },
-    { key: 'train/box_loss', label: 'Train Box Loss' },
-    { key: 'train/cls_loss', label: 'Train Class Loss' },
-    { key: 'val/box_loss', label: 'Val Box Loss' },
-  ]
-
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
     if (event.key === 'Escape') onClose()
   }, [onClose])
@@ -113,6 +111,40 @@ export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [handleKeyDown])
+
+  const renderMetricChart = (chartId: string, metricKey: string, setMetricKey: (key: string) => void) => {
+    const selectedTrialIds = trialIds.filter((trialId) => selectedTrials.has(trialId))
+    const chartWindowData = getChartWindowData(chartData, selectedTrialIds, metricKey, yAxisMode)
+    const yAxisValues = chartWindowData.flatMap((point: any) =>
+      selectedTrialIds
+        .map((trialId) => point[trialId]?.[metricKey])
+        .filter((value): value is number => typeof value === 'number')
+    )
+    const yAxisDomain = getYAxisDomain(yAxisValues, yAxisMode)
+
+    return (
+      <div key={chartId} style={{ minHeight: 420, border: '1px solid var(--panel-border)', borderRadius: 8, padding: '1rem' }}>
+        <div className="flex items-center justify-between gap-2" style={{ marginBottom: '1rem', flexWrap: 'wrap' }}>
+          <h3 style={{ fontSize: '1rem', fontWeight: 600, margin: 0 }}>{metricKey}</h3>
+          <select className="input" style={{ width: 360, maxWidth: '100%', height: 34, fontSize: '0.8rem' }} value={metricKey} onChange={(event) => setMetricKey(event.target.value)}>
+            {curveColumns.map((column) => <option key={column} value={column}>{column}</option>)}
+          </select>
+        </div>
+        <ResponsiveContainer width="100%" height={350}>
+          <LineChart data={chartWindowData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.25)" />
+            <XAxis dataKey="epoch" />
+            <YAxis domain={yAxisDomain} tickFormatter={formatAxisTick} width={56} allowDataOverflow={yAxisMode === 'tail'} />
+            <Tooltip />
+            <Legend />
+            {selectedTrialIds.map((trialId) => (
+              <Line key={trialId} type="monotone" dataKey={`${trialId}.${metricKey}`} name={trialLabels[trialId] || trialId} stroke={colorMap.get(trialId)} strokeWidth={2} dot={false} connectNulls />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    )
+  }
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -148,40 +180,13 @@ export function ExperimentCurvesDialog({ experimentId, onClose }: Props) {
           <div style={{ flex: 1, padding: '1.5rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
             {loading ? (
               <div className="text-center text-muted">加载中...</div>
-            ) : chartData.length === 0 ? (
+            ) : chartData.length === 0 || curveColumns.length === 0 ? (
               <div className="text-center text-muted">暂无可绘制曲线。</div>
             ) : (
-              metrics.map((metric) => {
-                const hasMetric = chartData.some((point: any) =>
-                  trialIds.some((trialId) => selectedTrials.has(trialId) && point[trialId] && typeof point[trialId][metric.key] === 'number')
-                )
-                if (!hasMetric) return null
-                const selectedTrialIds = trialIds.filter((trialId) => selectedTrials.has(trialId))
-                const chartWindowData = getChartWindowData(chartData, selectedTrialIds, metric.key, yAxisMode)
-                const yAxisValues = chartWindowData.flatMap((point: any) =>
-                  selectedTrialIds
-                    .map((trialId) => point[trialId]?.[metric.key])
-                    .filter((value): value is number => typeof value === 'number')
-                )
-                const yAxisDomain = getYAxisDomain(yAxisValues, yAxisMode)
-                return (
-                  <div key={metric.key} style={{ minHeight: 420, border: '1px solid var(--panel-border)', borderRadius: 8, padding: '1rem' }}>
-                    <h3 style={{ fontSize: '1rem', fontWeight: 600, textAlign: 'center' }}>{metric.label}</h3>
-                    <ResponsiveContainer width="100%" height="90%">
-                      <LineChart data={chartWindowData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.25)" />
-                        <XAxis dataKey="epoch" />
-                        <YAxis domain={yAxisDomain} tickFormatter={formatAxisTick} width={56} allowDataOverflow={yAxisMode === 'tail'} />
-                        <Tooltip />
-                        <Legend />
-                        {trialIds.filter((trialId) => selectedTrials.has(trialId)).map((trialId) => (
-                          <Line key={trialId} type="monotone" dataKey={`${trialId}.${metric.key}`} name={trialLabels[trialId] || trialId} stroke={colorMap.get(trialId)} strokeWidth={2} dot={false} connectNulls />
-                        ))}
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                )
-              })
+              <>
+                {renderMetricChart('primary', selectedMetricA, setSelectedMetricA)}
+                {renderMetricChart('secondary', selectedMetricB, setSelectedMetricB)}
+              </>
             )}
           </div>
         </div>

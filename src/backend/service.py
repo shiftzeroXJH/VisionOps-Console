@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import posixpath
 import re
@@ -2118,18 +2119,22 @@ class OrchestratorService:
             
             import csv
             trial_data = []
-            with open(results_csv, "r", encoding="utf-8") as f:
+            with open(results_csv, "r", encoding="utf-8", newline="") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     cleaned_row = {}
                     for k, v in row.items():
-                        if k and v:
-                            v_str = str(v).strip()
-                            if v_str:
-                                try:
-                                    cleaned_row[str(k).strip()] = float(v_str) if '.' in v_str else int(v_str)
-                                except ValueError:
-                                    pass
+                        if not k or v is None:
+                            continue
+                        v_str = str(v).strip()
+                        if not v_str:
+                            continue
+                        try:
+                            value = float(v_str)
+                        except ValueError:
+                            continue
+                        if math.isfinite(value):
+                            cleaned_row[str(k).strip()] = int(value) if value.is_integer() else value
                     if "epoch" in cleaned_row:
                         trial_data.append(cleaned_row)
             curves[trial.trial_id] = trial_data
