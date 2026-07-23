@@ -40,7 +40,7 @@ from backend.core.trainer import (
 )
 from backend.db.repository import Repository, default_project_name
 from backend.models import ExperimentConfig, GoalConfig, RemoteServer, TrialRecord
-from backend.utils import ensure_dir, local_weights_dir, read_json, utc_now_iso, write_json
+from backend.utils import ensure_dir, read_json, utc_now_iso, write_json
 
 
 class ServiceError(RuntimeError):
@@ -309,10 +309,6 @@ def _resolve_pretrained_model(pretrained: str) -> str:
     package_model_path = Path(__file__).resolve().parent / "models" / normalized_pretrained
     if package_model_path.exists():
         return str(package_model_path.resolve())
-
-    local_weight_path = local_weights_dir() / normalized_pretrained
-    if local_weight_path.exists():
-        return str(local_weight_path.resolve())
 
     if pretrained_path.exists():
         return str(pretrained_path.resolve())
