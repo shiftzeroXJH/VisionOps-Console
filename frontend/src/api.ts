@@ -25,7 +25,7 @@ export type Experiment = {
     trial_id: string;
     iteration: number;
     status: string;
-    started_at: string;
+    created_at: string;
     [key: string]: unknown;
   };
 };

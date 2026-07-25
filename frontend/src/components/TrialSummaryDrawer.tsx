@@ -223,7 +223,7 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                         <tr><td className="text-muted">同步状态</td><td>{trial.sync_status || '-'}</td></tr>
                         <tr><td className="text-muted">最近同步</td><td>{trial.last_synced_at || '-'}</td></tr>
                         <tr><td className="text-muted">已同步 epoch</td><td>{trial.last_synced_epoch_count ?? '-'}</td></tr>
-                        <tr><td className="text-muted">训练开始</td><td>{formatDateTime(trial.started_at)}</td></tr>
+                        <tr><td className="text-muted">训练开始</td><td>{formatDateTime(trial.created_at)}</td></tr>
                         <tr><td className="text-muted">本地目录</td><td style={{ fontSize: '0.75rem', wordBreak: 'break-all' }}>{trial.run_dir || '-'}</td></tr>
                         <tr><td className="text-muted">远程目录</td><td style={{ fontSize: '0.75rem', wordBreak: 'break-all' }}>{trial.remote_run_dir || '-'}</td></tr>
                         {trial.sync_error && <tr><td className="text-muted">同步错误</td><td className="text-danger">{trial.sync_error}</td></tr>}

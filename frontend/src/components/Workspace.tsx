@@ -334,7 +334,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
               <div className="flex gap-4 text-muted" style={{ fontSize: '0.875rem', flexWrap: 'wrap' }}>
                 <span>数据集：{experiment.dataset_root}</span>
                 <span>默认模型：{detail.default_model || experiment.pretrained_model}</span>
-                <span>最新训练：{formatDateTime(detail.latest_trial_started_at)}</span>
+                <span>最新训练：{formatDateTime(detail.latest_trial_created_at)}</span>
               </div>
             </div>
             <div className="workspace-summary-actions">

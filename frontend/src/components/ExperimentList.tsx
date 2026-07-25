@@ -32,10 +32,10 @@ const statusTextMap: Record<string, string> = {
 
 const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase()
 
-const formatDateTime = (value: string | undefined) => {
+const formatDate = (value: string | undefined) => {
   if (!value) return '-'
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('zh-CN')
 }
 
 const projectName = (experiment: Experiment) => {
@@ -154,7 +154,7 @@ export function ExperimentList({ experiments, activeId, onSelect, onExperimentUp
                     </div>
 
                     <div className="experiment-meta">
-                      <span>最新训练: {formatDateTime(exp.latest_trial?.started_at)}</span>
+                      <span>{formatDate(exp.latest_trial?.created_at)}</span>
                       <span>类型: {exp.task_type}</span>
                     </div>
 
