@@ -98,7 +98,6 @@ class Repository:
                     last_synced_epoch_count INTEGER NOT NULL DEFAULT 0,
                     unchanged_sync_count INTEGER NOT NULL DEFAULT 0,
                     last_synced_at TEXT NOT NULL DEFAULT '',
-                    started_at TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (experiment_id) REFERENCES experiments (experiment_id)
                 );
@@ -186,36 +185,10 @@ class Repository:
                 "last_synced_epoch_count": "INTEGER NOT NULL DEFAULT 0",
                 "unchanged_sync_count": "INTEGER NOT NULL DEFAULT 0",
                 "last_synced_at": "TEXT NOT NULL DEFAULT ''",
-                "started_at": "TEXT NOT NULL DEFAULT ''",
             }
             for column, definition in trial_defaults.items():
                 if column not in trial_columns:
                     conn.execute(f"ALTER TABLE trials ADD COLUMN {column} {definition}")
-            self._backfill_trial_started_at(conn)
-
-    def _backfill_trial_started_at(self, conn: sqlite3.Connection) -> None:
-        rows = conn.execute(
-            "SELECT trial_id, run_dir, created_at FROM trials WHERE TRIM(COALESCE(started_at, '')) = ''"
-        ).fetchall()
-        for row in rows:
-            timestamps: list[float] = []
-            run_path = Path(row["run_dir"])
-            for relative_path in ("config.json", "args.yaml", "stdout.log", "results.csv"):
-                candidate = run_path / relative_path
-                try:
-                    if candidate.is_file():
-                        timestamps.append(candidate.stat().st_mtime)
-                except OSError:
-                    continue
-            started_at = (
-                datetime.fromtimestamp(min(timestamps), timezone.utc).isoformat()
-                if timestamps
-                else row["created_at"]
-            )
-            conn.execute(
-                "UPDATE trials SET started_at = ? WHERE trial_id = ?",
-                (started_at, row["trial_id"]),
-            )
 
     def _backup_database(self) -> None:
         if self.db_path == ":memory:":
@@ -486,8 +459,8 @@ class Repository:
                     summary_path, status, source, note, reason, model, model_source,
                     params_source, remote_server_id, remote_run_dir, sync_status, sync_error,
                     remote_training_status, last_remote_csv_size, last_remote_csv_mtime,
-                    last_synced_epoch_count, unchanged_sync_count, last_synced_at, started_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_synced_epoch_count, unchanged_sync_count, last_synced_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     trial.trial_id,
@@ -516,8 +489,7 @@ class Repository:
                     trial.last_synced_epoch_count,
                     trial.unchanged_sync_count,
                     trial.last_synced_at,
-                    trial.started_at or utc_now_iso(),
-                    utc_now_iso(),
+                    trial.created_at or utc_now_iso(),
                 ),
             )
 
@@ -622,7 +594,7 @@ class Repository:
             last_synced_epoch_count=int(row["last_synced_epoch_count"]),
             unchanged_sync_count=int(row["unchanged_sync_count"]),
             last_synced_at=row["last_synced_at"],
-            started_at=row["started_at"],
+            created_at=row["created_at"],
         )
 
     def list_trials(self, experiment_id: str) -> list[TrialRecord]:
@@ -659,7 +631,7 @@ class Repository:
                 last_synced_epoch_count=int(row["last_synced_epoch_count"]),
                 unchanged_sync_count=int(row["unchanged_sync_count"]),
                 last_synced_at=row["last_synced_at"],
-                started_at=row["started_at"],
+                created_at=row["created_at"],
             )
             for row in rows
         ]

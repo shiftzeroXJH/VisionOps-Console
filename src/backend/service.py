@@ -769,7 +769,7 @@ class OrchestratorService:
                         "source": latest_trial.source,
                         "model": _model_basename(latest_trial.model or config.pretrained_model),
                         "remote_training_status": latest_trial.remote_training_status,
-                        "started_at": latest_trial.started_at,
+                        "created_at": latest_trial.created_at,
                     },
                 }
             )
@@ -786,7 +786,7 @@ class OrchestratorService:
             "default_export_dir": self._project_default_export_dir(config.project),
             "search_space": config.search_space,
             "trials": [self._trial_row(trial) for trial in trials],
-            "latest_trial_started_at": trials[-1].started_at if trials else "",
+            "latest_trial_created_at": trials[-1].created_at if trials else "",
         }
 
     def update_experiment(
@@ -1252,7 +1252,7 @@ class OrchestratorService:
                 "remote_training_status": trial.remote_training_status,
                 "last_synced_at": trial.last_synced_at,
                 "last_synced_epoch_count": trial.last_synced_epoch_count,
-                "started_at": trial.started_at,
+                "created_at": trial.created_at,
                 "logs": logs,
                 "metric_context": summary.get("metric_context", {}),
                 "final_metrics": summary.get("final_metrics", {}),
@@ -1289,7 +1289,7 @@ class OrchestratorService:
             "remote_training_status": trial.remote_training_status,
             "last_synced_at": trial.last_synced_at,
             "last_synced_epoch_count": trial.last_synced_epoch_count,
-            "started_at": trial.started_at,
+            "created_at": trial.created_at,
             "logs": logs,
             "imgsz": int(summary.get("params", {}).get("imgsz") or trial.params.get("imgsz") or 0),
         }
@@ -2203,7 +2203,7 @@ class OrchestratorService:
             "reason": trial.reason,
             "remote_training_status": trial.remote_training_status,
             "last_synced_at": trial.last_synced_at,
-            "started_at": trial.started_at,
+            "created_at": trial.created_at,
             "logs": self._trial_logs(trial.run_dir),
             "is_best": False,
         }
