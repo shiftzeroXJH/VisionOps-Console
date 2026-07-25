@@ -32,6 +32,12 @@ const statusTextMap: Record<string, string> = {
 
 const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase()
 
+const formatDateTime = (value: string | undefined) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+
 const projectName = (experiment: Experiment) => {
   const project = String(experiment.project || '').trim()
   return project || UNGROUPED_PROJECT
@@ -56,23 +62,6 @@ export function ExperimentList({ experiments, activeId, onSelect, onExperimentUp
   const [query, setQuery] = useState('')
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({})
   const [settingsProject, setSettingsProject] = useState<string | null>(null)
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'COMPLETED': return 'badge-success'
-      case 'FAILED':
-      case 'CANCELLED': return 'badge-danger'
-      case 'TRAINING':
-      case 'ANALYZING':
-      case 'RETRAINING':
-      case 'WAITING_USER_CONFIRM':
-      case 'AUTO_TUNE_PENDING':
-        return 'badge-warning'
-      default: return ''
-    }
-  }
-
-  const getStatusText = (status: string) => statusTextMap[status] || status.replace(/_/g, ' ')
 
   const groupedExperiments = useMemo(() => {
     const words = normalize(query).split(/\s+/).filter(Boolean)
@@ -162,13 +151,10 @@ export function ExperimentList({ experiments, activeId, onSelect, onExperimentUp
                   >
                     <div className="experiment-card-header">
                       <span className="experiment-title">{exp.description}</span>
-                      <span className={clsx('badge', getStatusBadge(exp.status))}>
-                        {getStatusText(exp.status)}
-                      </span>
                     </div>
 
                     <div className="experiment-meta">
-                      <span>试验次数: {exp.trial_count}</span>
+                      <span>最新训练: {formatDateTime(exp.latest_trial?.started_at)}</span>
                       <span>类型: {exp.task_type}</span>
                     </div>
 

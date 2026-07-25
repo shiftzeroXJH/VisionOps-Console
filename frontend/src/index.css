@@ -848,22 +848,41 @@ tr:hover td {
 }
 
 .validation-header {
-  justify-content: space-between;
+  position: relative;
+  justify-content: flex-start;
+  min-height: 58px;
+  padding-top: 0.55rem;
+  padding-bottom: 0.55rem;
 }
 
 .validation-header h2 {
   font-size: 1.15rem;
+  margin: 0;
 }
 
-.validation-kicker {
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+.validation-title {
+  position: absolute;
+  left: 50%;
+  max-width: 30%;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 .validation-toolbar {
   flex-wrap: wrap;
+}
+
+.validation-header .validation-toolbar {
+  max-width: calc(34% - 1rem);
+  padding: 0;
+  border: 0;
+}
+
+.validation-close {
+  margin-left: auto;
 }
 
 .validation-toolbar label {
@@ -986,4 +1005,23 @@ tr:hover td {
   margin: auto;
   color: rgba(226,232,240,0.9);
   font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .validation-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .validation-header .validation-toolbar {
+    max-width: calc(100% - 3rem);
+  }
+
+  .validation-title {
+    position: static;
+    flex-basis: 100%;
+    max-width: 100%;
+    order: 3;
+    transform: none;
+  }
 }

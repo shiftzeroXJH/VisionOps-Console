@@ -71,7 +71,8 @@ def run_validation_preview(request: dict[str, Any]) -> dict[str, Any]:
             plots=False,
             save=False,
             verbose=False,
-        )
+        ),
+        str(request.get("task_type", "detection")),
     )
 
     image_paths = sorted(
@@ -113,15 +114,23 @@ def run_validation_preview(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _extract_metrics(result: Any) -> dict[str, float]:
+def _extract_metrics(result: Any, task_type: str) -> dict[str, float]:
+    primary_component = {
+        "segment": "seg",
+        "obb": "obb",
+    }.get(task_type, "box")
+    components = (primary_component,) + tuple(
+        component for component in ("box", "seg", "obb") if component != primary_component
+    )
     metrics: dict[str, float] = {}
-    for key, candidates in {
-        "precision": ("box.mp", "seg.mp", "obb.mp"),
-        "recall": ("box.mr", "seg.mr", "obb.mr"),
-        "map50": ("box.map50", "seg.map50", "obb.map50"),
-        "map50_95": ("box.map", "seg.map", "obb.map"),
+    for key, attribute in {
+        "precision": "mp",
+        "recall": "mr",
+        "map50": "map50",
+        "map50_95": "map",
     }.items():
-        for candidate in candidates:
+        for component in components:
+            candidate = f"{component}.{attribute}"
             value = _nested_attr(result, candidate)
             if isinstance(value, (int, float)) and math.isfinite(float(value)):
                 metrics[key] = float(value)

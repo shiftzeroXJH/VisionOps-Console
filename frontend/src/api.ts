@@ -21,7 +21,13 @@ export type Experiment = {
     metric: string;
     value: number;
   };
-  latest_trial?: any; // Define properly if needed
+  latest_trial?: {
+    trial_id: string;
+    iteration: number;
+    status: string;
+    started_at: string;
+    [key: string]: unknown;
+  };
 };
 
 async function safeThrowError(res: Response): Promise<never> {
@@ -217,6 +223,12 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async getValidationPreview(trialId: string) {
+    const res = await fetch(`/api/trials/${trialId}/validation-preview`);
     if (!res.ok) await safeThrowError(res);
     return res.json();
   },

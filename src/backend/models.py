@@ -59,6 +59,7 @@ class TrialRecord:
     last_synced_epoch_count: int = 0
     unchanged_sync_count: int = 0
     last_synced_at: str = ""
+    started_at: str = ""
     dataset_analysis: dict[str, Any] = field(default_factory=dict)
 
 

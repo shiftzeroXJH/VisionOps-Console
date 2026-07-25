@@ -7,29 +7,35 @@ interface Props {
   onRequestDeleteTrial: (trial: { trial_id: string; display_name?: string }) => void
 }
 
-export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequestDeleteTrial }: Props) {
-  const sourceLabel = (source: string) => {
-    switch (source) {
-      case 'trained':
-        return '本地训练'
-      case 'imported':
-        return '本地导入'
-      case 'remote_sftp':
-        return '远程导入'
-      default:
-        return source || '-'
-    }
-  }
+const HIGHLIGHT_METRICS = ['map50_95', 'map50', 'delta_map50_95', 'precision', 'recall'] as const
 
+export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequestDeleteTrial }: Props) {
   if (!data?.rows?.length) {
     return <div className="p-4 text-muted">暂无训练记录，请先运行或导入一个 Trial。</div>
   }
 
   const cols = [
-    'iteration', 'display_name', 'status', 'model_display', 'source', 'server',
+    'iteration', 'display_name', 'status',
     'map50_95', 'map50', 'delta_map50_95', 'precision', 'recall',
-    'best_epoch', 'epochs_completed', 'imgsz', 'batch', 'lr0', 'patience',
+    'best_epoch', 'epochs_completed', 'model_display', 'imgsz', 'batch', 'lr0', 'patience',
   ]
+
+  const metricMaximums = Object.fromEntries(
+    HIGHLIGHT_METRICS.map((key) => [
+      key,
+      Math.max(
+        ...data.rows
+          .map((row: any) => row[key])
+          .filter((value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)),
+      ),
+    ]),
+  ) as Record<(typeof HIGHLIGHT_METRICS)[number], number>
+
+  const isMetricMaximum = (row: any, key: string) =>
+    HIGHLIGHT_METRICS.includes(key as (typeof HIGHLIGHT_METRICS)[number])
+    && typeof row[key] === 'number'
+    && Number.isFinite(row[key])
+    && row[key] === metricMaximums[key as (typeof HIGHLIGHT_METRICS)[number]]
 
   const columnLabel = (key: string) => {
     const labels: Record<string, string> = {
@@ -82,7 +88,6 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
     if (key === 'status') return renderStatus(row)
     if (key === 'delta_map50_95') return renderDelta(row.delta_map50_95)
     if (['imgsz', 'batch', 'lr0', 'patience'].includes(key)) return formatValue(row.params?.[key])
-    if (key === 'source') return <span className="badge">{sourceLabel(row.source)}</span>
     return formatValue(row[key])
   }
 
@@ -104,7 +109,7 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
               style={{ cursor: 'pointer', backgroundColor: row.is_best ? 'rgba(16,185,129,0.06)' : undefined }}
             >
               {cols.map((col) => (
-                <td key={col} style={{ fontWeight: col === 'map50_95' || (col === 'display_name' && row.is_best) ? 700 : undefined }}>
+                <td key={col} style={{ fontWeight: isMetricMaximum(row, col) ? 700 : undefined }}>
                   {cellValue(row, col)}
                 </td>
               ))}

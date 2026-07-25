@@ -3,15 +3,18 @@ import { ChevronLeft, ChevronRight, Loader2, Minus, Plus, RefreshCw, X } from 'l
 import { api } from '../api'
 
 interface Props {
-  trial: { trial_id: string; display_name?: string }
+  trial: { trial_id: string; display_name?: string; task_type?: string }
   onClose: () => void
 }
 
-const metricLabels: Record<string, string> = {
-  map50_95: 'mAP50-95',
-  map50: 'mAP50',
-  precision: 'Precision',
-  recall: 'Recall',
+const metricLabels = (taskType: string): Record<string, string> => {
+  const suffix = taskType === 'segment' ? '(M)' : '(B)'
+  return {
+    map50_95: `mAP50-95${suffix}`,
+    map50: `mAP50${suffix}`,
+    precision: `Precision${suffix}`,
+    recall: `Recall${suffix}`,
+  }
 }
 
 const MIN_ZOOM = 0.02
@@ -31,6 +34,23 @@ export function ValidationPreviewDialog({ trial, onClose }: Props) {
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 })
   const viewerRef = useRef<HTMLDivElement | null>(null)
   const labelViewportRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api.getValidationPreview(trial.trial_id)
+      .then((response) => {
+        if (cancelled || !response?.result) return
+        const saved = response.result
+        setResult(saved)
+        setImageIndex(0)
+        if (typeof saved.image_limit === 'number') setImageLimit(saved.image_limit)
+        if (typeof saved.conf === 'number') setConf(saved.conf)
+      })
+      .catch(() => {
+        if (!cancelled) setError('读取验证记录失败')
+      })
+    return () => { cancelled = true }
+  }, [trial.trial_id])
 
   useEffect(() => {
     if (!jobId || result || error) return
@@ -58,7 +78,10 @@ export function ValidationPreviewDialog({ trial, onClose }: Props) {
   const startValidation = async () => {
     setError('')
     setResult(null)
+    setJobId(null)
     setJobStatus('queued')
+    setImageIndex(0)
+    setImageSize({ width: 0, height: 0 })
     try {
       const res = await api.validateTrialPreview(trial.trial_id, { image_limit: imageLimit, conf })
       setJobId(res.job_id)
@@ -131,6 +154,7 @@ export function ValidationPreviewDialog({ trial, onClose }: Props) {
   const isRunning = Boolean(jobId) && !result && !error
   const images = result?.images || []
   const currentImage = images[imageIndex]
+  const labels = metricLabels(result?.task_type || trial.task_type || 'detection')
 
   const moveImage = (delta: number) => {
     if (!images.length) return
@@ -199,36 +223,32 @@ export function ValidationPreviewDialog({ trial, onClose }: Props) {
     <div className="validation-overlay">
       <div className="validation-dialog">
         <div className="validation-header">
-          <div>
-            <div className="validation-kicker">Trial 验证</div>
-            <h2>{trial.display_name || trial.trial_id}</h2>
+          <div className="validation-toolbar">
+            <label>
+              图片数量
+              <input className="input" type="number" min={1} max={500} value={imageLimit} onChange={(event) => setImageLimit(Number(event.target.value))} disabled={isRunning} />
+            </label>
+            <label>
+              conf
+              <input className="input" type="number" min={0.001} max={1} step={0.01} value={conf} onChange={(event) => setConf(Number(event.target.value))} disabled={isRunning} />
+            </label>
+            <button className="btn btn-primary" onClick={startValidation} disabled={isRunning}>
+              {isRunning ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <RefreshCw size={16} />}
+              {result ? '重新验证' : '开始验证'}
+            </button>
+            {isRunning && <span className="text-muted">任务状态：{jobStatus || 'queued'}</span>}
+            {error && <span className="text-danger">{error}</span>}
           </div>
-          <button className="btn" onClick={onClose} title="关闭"><X size={18} /></button>
-        </div>
-
-        <div className="validation-toolbar">
-          <label>
-            图片数量
-            <input className="input" type="number" min={1} max={500} value={imageLimit} onChange={(event) => setImageLimit(Number(event.target.value))} disabled={isRunning} />
-          </label>
-          <label>
-            conf
-            <input className="input" type="number" min={0.001} max={1} step={0.01} value={conf} onChange={(event) => setConf(Number(event.target.value))} disabled={isRunning} />
-          </label>
-          <button className="btn btn-primary" onClick={startValidation} disabled={isRunning}>
-            {isRunning ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <RefreshCw size={16} />}
-            {result ? '重新验证' : '开始验证'}
-          </button>
-          {isRunning && <span className="text-muted">任务状态：{jobStatus || 'queued'}</span>}
-          {error && <span className="text-danger">{error}</span>}
+          <h2 className="validation-title">{trial.display_name || trial.trial_id}</h2>
+          <button className="btn validation-close" onClick={onClose} title="关闭"><X size={18} /></button>
         </div>
 
         {result && (
           <>
             <div className="validation-metrics">
-              {Object.keys(metricLabels).map((key) => (
+              {Object.keys(labels).map((key) => (
                 <div key={key} className="validation-metric-card">
-                  <span>{metricLabels[key]}</span>
+                  <span>{labels[key]}</span>
                   <strong>{typeof result.metrics?.[key] === 'number' ? result.metrics[key].toFixed(4) : '-'}</strong>
                 </div>
               ))}

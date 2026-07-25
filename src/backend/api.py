@@ -302,6 +302,14 @@ def validate_trial_preview(trial_id: str, payload: dict[str, Any] | None = None)
     return _invoke_sync("start-validate-trial-preview", start_job)
 
 
+@app.get("/api/trials/{trial_id}/validation-preview")
+def get_validation_preview(trial_id: str) -> dict[str, Any]:
+    return _invoke_sync(
+        "get-validation-preview",
+        lambda: service.get_validation_preview(trial_id),
+    )
+
+
 @app.delete("/api/trials/{trial_id}")
 def delete_trial(trial_id: str, keep_files: bool = True, force: bool = False) -> dict[str, Any]:
     return _invoke_sync(

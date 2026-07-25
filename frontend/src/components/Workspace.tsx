@@ -26,6 +26,12 @@ const CANCELLABLE_STATUSES = new Set([
 
 const CHART_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6']
 
+const formatDateTime = (value: string | undefined) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+
 type YAxisMode = 'overview' | 'tail'
 
 const getYAxisDomain = (values: number[], mode: YAxisMode): [number, number] | [number, 'auto'] => {
@@ -328,8 +334,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
               <div className="flex gap-4 text-muted" style={{ fontSize: '0.875rem', flexWrap: 'wrap' }}>
                 <span>数据集：{experiment.dataset_root}</span>
                 <span>默认模型：{detail.default_model || experiment.pretrained_model}</span>
-                <span>状态：{experiment.status}</span>
-                <span>试验次数：{detail.trial_count || 0}</span>
+                <span>最新训练：{formatDateTime(detail.latest_trial_started_at)}</span>
               </div>
             </div>
             <div className="workspace-summary-actions">

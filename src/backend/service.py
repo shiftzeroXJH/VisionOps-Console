@@ -65,6 +65,9 @@ DEFAULT_YOLO_PYTHON = r"D:\apps\miniforge\envs\yolo_env\python.exe"
 YOLO_PYTHON_SETTING_KEY = "yolo_python"
 DEFAULT_EXPORT_DIR = r"C:\Users\Administrator\Downloads"
 PROJECT_EXPORT_DIR_SETTING_PREFIX = "project_default_export_dir:"
+VALIDATION_PREVIEW_DIRNAME = ".validation_previews"
+VALIDATION_CURRENT_DIRNAME = "current"
+VALIDATION_RESULT_FILENAME = "validation_result.json"
 ILLEGAL_WINDOWS_NAME_CHARS = set('<>:"/\\|?*')
 PLATFORM_CONTROLLED_YOLO_PARAMS = frozenset(
     {
@@ -203,10 +206,6 @@ def _python_for_yolo() -> str:
     return sys.executable
 
 
-def _safe_validation_id() -> str:
-    return datetime.now(timezone.utc).strftime("val_%Y%m%d_%H%M%S_%f")
-
-
 def _validate_preview_filename(filename: str) -> str:
     normalized = str(filename or "").strip()
     if not normalized:
@@ -216,6 +215,29 @@ def _validate_preview_filename(filename: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", normalized):
         raise ServiceError("invalid filename")
     return normalized
+
+
+def _validation_preview_root(run_dir: str) -> Path:
+    run_path = Path(run_dir).resolve()
+    preview_root = (run_path / VALIDATION_PREVIEW_DIRNAME).resolve()
+    if not preview_root.is_relative_to(run_path):
+        raise ServiceError("invalid validation preview path")
+    return preview_root
+
+
+def _last_json_object(path: Path) -> dict[str, Any] | None:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            value = json.loads(line.strip())
+        except (TypeError, ValueError):
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
 
 
 def _directory_size(path: Path) -> tuple[int, int]:
@@ -747,6 +769,7 @@ class OrchestratorService:
                         "source": latest_trial.source,
                         "model": _model_basename(latest_trial.model or config.pretrained_model),
                         "remote_training_status": latest_trial.remote_training_status,
+                        "started_at": latest_trial.started_at,
                     },
                 }
             )
@@ -763,6 +786,7 @@ class OrchestratorService:
             "default_export_dir": self._project_default_export_dir(config.project),
             "search_space": config.search_space,
             "trials": [self._trial_row(trial) for trial in trials],
+            "latest_trial_started_at": trials[-1].started_at if trials else "",
         }
 
     def update_experiment(
@@ -1028,7 +1052,7 @@ class OrchestratorService:
             experiment_dir = (Path(config.save_root).resolve() / "experiments" / config.experiment_id).resolve()
             for trial in self.repo.list_trials(config.experiment_id):
                 run_dir = Path(trial.run_dir).resolve()
-                preview_dir = (run_dir / ".validation_previews").resolve()
+                preview_dir = _validation_preview_root(trial.run_dir)
                 if not preview_dir.exists():
                     continue
                 if experiment_dir not in preview_dir.parents and run_dir not in preview_dir.parents:
@@ -1228,6 +1252,7 @@ class OrchestratorService:
                 "remote_training_status": trial.remote_training_status,
                 "last_synced_at": trial.last_synced_at,
                 "last_synced_epoch_count": trial.last_synced_epoch_count,
+                "started_at": trial.started_at,
                 "logs": logs,
                 "metric_context": summary.get("metric_context", {}),
                 "final_metrics": summary.get("final_metrics", {}),
@@ -1264,6 +1289,7 @@ class OrchestratorService:
             "remote_training_status": trial.remote_training_status,
             "last_synced_at": trial.last_synced_at,
             "last_synced_epoch_count": trial.last_synced_epoch_count,
+            "started_at": trial.started_at,
             "logs": logs,
             "imgsz": int(summary.get("params", {}).get("imgsz") or trial.params.get("imgsz") or 0),
         }
@@ -1395,8 +1421,14 @@ class OrchestratorService:
         if normalized_conf < 0.001 or normalized_conf > 1.0:
             raise ServiceError("conf must be between 0.001 and 1.0")
 
-        validation_id = _safe_validation_id()
-        output_dir = ensure_dir(run_dir / ".validation_previews" / validation_id)
+        preview_root = _validation_preview_root(trial.run_dir)
+        if preview_root.exists():
+            try:
+                shutil.rmtree(preview_root, onerror=_handle_rmtree_error)
+            except OSError as exc:
+                raise ServiceError(f"failed to clear previous validation preview: {exc}") from exc
+        validation_id = VALIDATION_CURRENT_DIRNAME
+        output_dir = ensure_dir(preview_root / validation_id)
         request_path = output_dir / ".validation_request.json"
         stdout_log = output_dir / "stdout.log"
         stderr_log = output_dir / "stderr.log"
@@ -1442,10 +1474,11 @@ class OrchestratorService:
         except (IndexError, json.JSONDecodeError) as exc:
             raise ServiceError("validation worker did not return valid JSON") from exc
 
-        return {
+        result = {
             "trial_id": trial_id,
             "display_name": trial.display_name,
             "validation_id": validation_id,
+            "task_type": config.task_type,
             "split": "val",
             "conf": normalized_conf,
             "image_limit": normalized_limit,
@@ -1456,6 +1489,91 @@ class OrchestratorService:
             "images": worker_result.get("images", []),
             "stdout_log": str(stdout_log),
             "stderr_log": str(stderr_log),
+        }
+        write_json(output_dir / VALIDATION_RESULT_FILENAME, result)
+        return result
+
+    def get_validation_preview(self, trial_id: str) -> dict[str, Any]:
+        trial = self.repo.get_trial(trial_id)
+        config = self.repo.get_experiment(trial.experiment_id)
+        preview_root = _validation_preview_root(trial.run_dir)
+        current_result = self._read_validation_preview_result(
+            trial,
+            config,
+            preview_root / VALIDATION_CURRENT_DIRNAME,
+        )
+        if current_result is not None:
+            return {"trial_id": trial_id, "result": current_result}
+
+        if not preview_root.exists():
+            return {"trial_id": trial_id, "result": None}
+
+        legacy_dirs = sorted(
+            (
+                path for path in preview_root.iterdir()
+                if path.is_dir() and path.name.startswith("val_")
+            ),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for preview_dir in legacy_dirs:
+            result = self._read_validation_preview_result(trial, config, preview_dir)
+            if result is not None:
+                return {"trial_id": trial_id, "result": result}
+        return {"trial_id": trial_id, "result": None}
+
+    def _read_validation_preview_result(
+        self,
+        trial: TrialRecord,
+        config: ExperimentConfig,
+        preview_dir: Path,
+    ) -> dict[str, Any] | None:
+        preview_root = _validation_preview_root(trial.run_dir)
+        resolved_dir = preview_dir.resolve()
+        if not resolved_dir.is_relative_to(preview_root) or not resolved_dir.is_dir():
+            return None
+        try:
+            validation_id = _validate_preview_filename(resolved_dir.name)
+        except ServiceError:
+            return None
+
+        result_path = resolved_dir / VALIDATION_RESULT_FILENAME
+        if result_path.exists():
+            try:
+                stored = read_json(result_path)
+            except (OSError, ValueError):
+                stored = None
+            if isinstance(stored, dict):
+                stored["trial_id"] = trial.trial_id
+                stored["display_name"] = trial.display_name
+                stored["validation_id"] = validation_id
+                stored.setdefault("task_type", config.task_type)
+                return stored
+
+        request_path = resolved_dir / ".validation_request.json"
+        stdout_path = resolved_dir / "stdout.log"
+        try:
+            request = read_json(request_path)
+        except (OSError, ValueError):
+            return None
+        worker_result = _last_json_object(stdout_path)
+        if not isinstance(request, dict) or worker_result is None:
+            return None
+        return {
+            "trial_id": trial.trial_id,
+            "display_name": trial.display_name,
+            "validation_id": validation_id,
+            "task_type": str(request.get("task_type") or config.task_type),
+            "split": "val",
+            "conf": request.get("conf"),
+            "image_limit": request.get("image_limit"),
+            "imgsz": request.get("imgsz"),
+            "batch": request.get("batch"),
+            "weight_path": request.get("model_path", ""),
+            "metrics": worker_result.get("metrics", {}),
+            "images": worker_result.get("images", []),
+            "stdout_log": str(stdout_path),
+            "stderr_log": str(resolved_dir / "stderr.log"),
         }
 
     def import_run(
@@ -2085,6 +2203,7 @@ class OrchestratorService:
             "reason": trial.reason,
             "remote_training_status": trial.remote_training_status,
             "last_synced_at": trial.last_synced_at,
+            "started_at": trial.started_at,
             "logs": self._trial_logs(trial.run_dir),
             "is_best": False,
         }
@@ -2167,7 +2286,7 @@ class OrchestratorService:
         normalized_validation_id = _validate_preview_filename(validation_id)
         normalized_filename = _validate_preview_filename(filename)
         run_dir_resolved = Path(trial.run_dir).resolve()
-        preview_dir = (run_dir_resolved / ".validation_previews" / normalized_validation_id).resolve()
+        preview_dir = (_validation_preview_root(trial.run_dir) / normalized_validation_id).resolve()
         if not preview_dir.is_relative_to(run_dir_resolved):
             raise ServiceError("invalid validation id")
         file_path = (preview_dir / normalized_filename).resolve()
