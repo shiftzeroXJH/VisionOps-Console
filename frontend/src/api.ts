@@ -30,6 +30,56 @@ export type Experiment = {
   };
 };
 
+export type WorkbenchModel = {
+  trial_id: string;
+  trial_name: string;
+  experiment_id: string;
+  experiment_name: string;
+  project: string;
+  created_at?: string;
+  path: string;
+  default_checkpoint: string;
+  checkpoints: Array<{
+    name: string;
+    label: string;
+    epoch?: number | null;
+    path: string;
+  }>;
+};
+
+export type Detection = {
+  class_id: number;
+  class_name: string;
+  confidence?: number | null;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  polygon?: Array<[number, number]>;
+};
+
+export type WorkbenchRoi = {
+  cx: number;
+  cy: number;
+  width: number;
+  height: number;
+  angle: number;
+};
+
+export type WorkbenchImage = {
+  image_id: string;
+  name: string;
+  width: number;
+  height: number;
+  status?: string;
+  error?: string;
+  detections?: Detection[];
+  labels?: Detection[];
+  roi?: WorkbenchRoi | null;
+  rotation?: number;
+  revision?: number;
+};
+
 async function safeThrowError(res: Response): Promise<never> {
   let detail: any;
   try {
@@ -299,6 +349,99 @@ export const api = {
 
   async getTrialVisualizations(trialId: string) {
     const res = await fetch(`/api/trials/${trialId}/visualizations`);
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async getWorkbenchModels(): Promise<{ models: WorkbenchModel[]; effective_yolo_python: string }> {
+    const res = await fetch('/api/workbench/models');
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async createWorkbenchSession() {
+    const res = await fetch('/api/workbench/sessions', { method: 'POST' });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async getWorkbenchSession(sessionId: string) {
+    const res = await fetch(`/api/workbench/sessions/${sessionId}`);
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async uploadWorkbenchImages(sessionId: string, files: File[]) {
+    const images: WorkbenchImage[] = [];
+    const rejected: Array<{ name: string; error: string }> = [];
+    for (let offset = 0; offset < files.length; offset += 200) {
+      const form = new FormData();
+      files.slice(offset, offset + 200).forEach((file) => form.append('files', file));
+      const res = await fetch(`/api/workbench/sessions/${sessionId}/images`, { method: 'POST', body: form });
+      if (!res.ok) await safeThrowError(res);
+      const result = await res.json();
+      images.push(...(result.images || []));
+      rejected.push(...(result.rejected || []));
+    }
+    return { session_id: sessionId, images, rejected };
+  },
+
+  async deleteWorkbenchImages(sessionId: string, imageIds: string[]) {
+    const res = await fetch(`/api/workbench/sessions/${sessionId}/images`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_ids: imageIds })
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async updateWorkbenchImageRoi(sessionId: string, imageId: string, roi: WorkbenchRoi | null) {
+    const res = await fetch(`/api/workbench/sessions/${sessionId}/images/${imageId}/roi`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roi })
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async rotateWorkbenchImage(sessionId: string, imageId: string, direction: 'clockwise' | 'counterclockwise') {
+    const res = await fetch(`/api/workbench/sessions/${sessionId}/images/${imageId}/rotate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ direction })
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async inferWorkbench(sessionId: string, payload: any) {
+    const res = await fetch(`/api/workbench/sessions/${sessionId}/infer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async inspectWorkbenchDataset(datasetPath: string) {
+    const res = await fetch('/api/workbench/datasets/inspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dataset_path: datasetPath })
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async evaluateWorkbench(payload: any) {
+    const res = await fetch('/api/workbench/evaluations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
     if (!res.ok) await safeThrowError(res);
     return res.json();
   }

@@ -12,6 +12,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any
+from uuid import uuid4
 
 from backend.constants import (
     EXPERIMENT_FILENAME,
@@ -42,6 +43,7 @@ from backend.core.trainer import (
 from backend.db.repository import Repository, default_project_name
 from backend.models import ExperimentConfig, GoalConfig, RemoteServer, TrialRecord
 from backend.utils import ensure_dir, read_json, utc_now_iso, write_json
+from backend.workbench import WorkbenchService
 
 
 class ServiceError(RuntimeError):
@@ -373,6 +375,10 @@ class OrchestratorService:
                 self._migrate_legacy_db_if_needed(old_repo_path, new_repo_path)
         self.repo = Repository(repo_path)
         self._bootstrap_python_setting()
+        workbench_cache = None
+        if repo_path == ":memory:":
+            workbench_cache = Path(".workbench_cache") / "tests" / uuid4().hex
+        self.workbench = WorkbenchService(self.repo, self._python_for_yolo, cache_root=workbench_cache)
 
     def _yolo_param_schema(self) -> dict[str, dict[str, str]]:
         python_executable = self._python_for_yolo()
@@ -1066,6 +1072,10 @@ class OrchestratorService:
                     deleted_bytes += size
                 except Exception as exc:
                     warnings.append(f"failed to delete {preview_dir}: {exc}")
+        workbench_result = self.workbench.clear_cache()
+        deleted_dirs += int(workbench_result.get("deleted_dirs", 0))
+        deleted_files += int(workbench_result.get("deleted_files", 0))
+        deleted_bytes += int(workbench_result.get("deleted_bytes", 0))
         return {
             "status": "cleared",
             "deleted_dirs": deleted_dirs,
@@ -1292,6 +1302,7 @@ class OrchestratorService:
             "created_at": trial.created_at,
             "logs": logs,
             "imgsz": int(summary.get("params", {}).get("imgsz") or trial.params.get("imgsz") or 0),
+            "dataset_yaml": config.dataset_yaml,
         }
         summary["dataset_analysis"] = trial.dataset_analysis
         return summary

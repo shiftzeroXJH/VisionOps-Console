@@ -56,7 +56,7 @@ export function SettingsDialog({ onClose }: Props) {
   }, [])
 
   const clearValidationCache = async () => {
-    if (!confirm('确定清除所有验证缓存吗？这只会删除预览图片，不会删除训练记录。')) return
+    if (!confirm('确定清除验证与模型工作台缓存吗？这不会删除训练记录或评估输出的预测 XML。')) return
     setClearing(true)
     setError('')
     setResult(null)
@@ -78,7 +78,7 @@ export function SettingsDialog({ onClose }: Props) {
       const res = await api.updateSettings({ yolo_python: yoloPython })
       setYoloPython(res.yolo_python || '')
       setEffectivePython(res.effective_yolo_python || '')
-      setSaveMessage('已保存。后续训练、验证预览和导出都会使用这个 Python。')
+      setSaveMessage('已保存。后续训练、验证预览、模型推理、模型评估和 ONNX 导出都会使用这个 Python。')
     } catch (err: any) {
       setError(err?.detail?.error || '保存设置失败')
     } finally {
@@ -101,7 +101,7 @@ export function SettingsDialog({ onClose }: Props) {
           <div className="settings-form-block">
             <h3>YOLO Python</h3>
             <p className="text-muted">
-              设置训练、验证预览和导出 ONNX 时使用的 Python 可执行文件。留空时会使用当前检测到的默认路径。
+              设置训练、验证预览、模型推理、模型评估和导出 ONNX 时使用的 Python 可执行文件。留空时会使用当前检测到的默认路径。
             </p>
             <input
               className="input"
@@ -122,8 +122,8 @@ export function SettingsDialog({ onClose }: Props) {
 
         <section className="settings-section">
           <div>
-            <h3>验证缓存</h3>
-            <p className="text-muted">清除验证功能生成的 label/predict 预览图片，释放磁盘空间。</p>
+            <h3>验证与工作台缓存</h3>
+            <p className="text-muted">清除验证预览、上传图片和临时推理结果；不会删除训练记录或预测 XML。</p>
           </div>
           <button className="btn btn-danger" onClick={clearValidationCache} disabled={clearing}>
             <Trash2 size={16} /> {clearing ? '清除中...' : '清除缓存'}

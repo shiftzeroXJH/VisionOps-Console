@@ -3,10 +3,12 @@ import { api, type Experiment } from './api'
 import { ExperimentList } from './components/ExperimentList'
 import { Workspace } from './components/Workspace'
 import { CreateExperimentDialog } from './components/CreateExperimentDialog'
-import { Settings, ActivitySquare, Plus } from 'lucide-react'
+import { Settings, ActivitySquare, Home, Plus } from 'lucide-react'
 import { SettingsDialog } from './components/SettingsDialog'
+import { HomePage } from './components/HomePage'
+import { ModelWorkbench } from './components/ModelWorkbench'
 
-function App() {
+function TrainingPlatform() {
   const [experiments, setExperiments] = useState<Experiment[]>([])
   const [activeExperimentId, setActiveExperimentId] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
@@ -46,6 +48,9 @@ function App() {
             <span>YOLO 实验面板</span>
           </div>
           <div className="flex gap-2">
+            <button className="btn" style={{ padding: '0.25rem 0.5rem' }} onClick={() => { window.location.hash = '#/' }} title="返回首页">
+              <Home size={16} />
+            </button>
             <button className="btn" style={{ padding: '0.25rem 0.5rem' }} onClick={() => setShowSettings(true)} title="设置">
               <Settings size={16} />
             </button>
@@ -96,6 +101,21 @@ function App() {
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
     </div>
   )
+}
+
+function App() {
+  const [route, setRoute] = useState(window.location.hash || '#/')
+
+  useEffect(() => {
+    const updateRoute = () => setRoute(window.location.hash || '#/')
+    window.addEventListener('hashchange', updateRoute)
+    return () => window.removeEventListener('hashchange', updateRoute)
+  }, [])
+
+  if (route.startsWith('#/training')) return <TrainingPlatform />
+  if (route.startsWith('#/workbench/evaluation')) return <ModelWorkbench key={route.includes('?') ? route : 'workbench'} tab="evaluation" />
+  if (route.startsWith('#/workbench')) return <ModelWorkbench key={route.includes('?') ? route : 'workbench'} tab="inference" />
+  return <HomePage />
 }
 
 export default App

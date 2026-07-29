@@ -4,12 +4,13 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from backend.service import OrchestratorService, ServiceError
+from backend.workbench import WorkbenchError
 from backend.jobs import JobStore
 
 app = FastAPI(title="yolo-platform", version="0.1.0")
@@ -20,7 +21,7 @@ service = OrchestratorService(db_path=os.environ.get("YOLO_DB_PATH"))
 def _invoke_sync(action: str, callback: Any) -> dict[str, Any]:
     try:
         return callback()
-    except (ServiceError, FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+    except (ServiceError, WorkbenchError, FileNotFoundError, KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail={"error": str(exc), "action": action}) from exc
 
 
@@ -42,6 +43,117 @@ def health() -> dict[str, str]:
 @app.get("/api/experiments")
 def list_experiments() -> dict[str, Any]:
     return _invoke_sync("list-experiments", service.list_experiments)
+
+
+@app.get("/api/workbench/models")
+def list_workbench_models() -> dict[str, Any]:
+    return _invoke_sync("list-workbench-models", service.workbench.list_models)
+
+
+@app.post("/api/workbench/sessions")
+def create_workbench_session() -> dict[str, Any]:
+    return _invoke_sync("create-workbench-session", service.workbench.create_session)
+
+
+@app.get("/api/workbench/sessions/{session_id}")
+def get_workbench_session(session_id: str) -> dict[str, Any]:
+    return _invoke_sync("get-workbench-session", lambda: service.workbench.get_session(session_id))
+
+
+@app.delete("/api/workbench/sessions/{session_id}")
+def delete_workbench_session(session_id: str) -> dict[str, Any]:
+    return _invoke_sync("delete-workbench-session", lambda: service.workbench.delete_session(session_id))
+
+
+@app.post("/api/workbench/sessions/{session_id}/images")
+async def upload_workbench_images(
+    session_id: str,
+    files: list[UploadFile] = File(...),
+) -> dict[str, Any]:
+    try:
+        uploads = [(upload.filename or "image", upload.file) for upload in files]
+        return _invoke_sync(
+            "upload-workbench-images",
+            lambda: service.workbench.add_images(session_id, uploads),
+        )
+    finally:
+        for upload in files:
+            await upload.close()
+
+
+@app.delete("/api/workbench/sessions/{session_id}/images")
+def delete_workbench_images(session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload or {})
+    return _invoke_sync(
+        "delete-workbench-images",
+        lambda: service.workbench.delete_images(session_id, list(body.get("image_ids") or [])),
+    )
+
+
+@app.patch("/api/workbench/sessions/{session_id}/images/{image_id}/roi")
+def update_workbench_image_roi(session_id: str, image_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload or {})
+    return _invoke_sync(
+        "update-workbench-image-roi",
+        lambda: service.workbench.set_image_roi(session_id, image_id, body.get("roi")),
+    )
+
+
+@app.post("/api/workbench/sessions/{session_id}/images/{image_id}/rotate")
+def rotate_workbench_image(session_id: str, image_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload or {})
+    return _invoke_sync(
+        "rotate-workbench-image",
+        lambda: service.workbench.rotate_image(session_id, image_id, str(body.get("direction", ""))),
+    )
+
+
+@app.post("/api/workbench/sessions/{session_id}/infer")
+def infer_workbench_images(session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload or {})
+    return _invoke_async(
+        "workbench-inference",
+        session_id,
+        lambda: service.workbench.infer(session_id, body),
+    )
+
+
+@app.get("/api/workbench/sessions/{session_id}/images/{image_id}/file")
+def get_workbench_image(session_id: str, image_id: str) -> FileResponse:
+    try:
+        return FileResponse(service.workbench.image_path(session_id, image_id))
+    except (WorkbenchError, OSError) as exc:
+        raise HTTPException(status_code=400, detail={"error": str(exc), "action": "get-workbench-image"}) from exc
+
+
+@app.post("/api/workbench/datasets/inspect")
+def inspect_workbench_dataset(payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload or {})
+    return _invoke_sync(
+        "inspect-workbench-dataset",
+        lambda: service.workbench.inspect_dataset(str(body.get("dataset_path", ""))),
+    )
+
+
+@app.post("/api/workbench/evaluations")
+def create_workbench_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload or {})
+    return _invoke_async(
+        "workbench-evaluation",
+        "workbench",
+        lambda: service.workbench.evaluate(body),
+    )
+
+
+@app.get("/api/workbench/evaluations/{evaluation_id}/images/{image_id}/file")
+def get_workbench_evaluation_image(evaluation_id: str, image_id: str) -> FileResponse:
+    try:
+        return FileResponse(service.workbench.evaluation_image_path(evaluation_id, image_id))
+    except (WorkbenchError, OSError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": str(exc), "action": "get-workbench-evaluation-image"},
+        ) from exc
 
 
 @app.post("/api/settings/clear-validation-cache")

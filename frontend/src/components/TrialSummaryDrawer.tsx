@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Download, Edit2, Eye, RefreshCw, X } from 'lucide-react'
+import { Download, Edit2, RefreshCw, ScanSearch, X } from 'lucide-react'
 import { api } from '../api'
 import { ExportOnnxDialog } from './ExportOnnxDialog'
 import { ImageGallery } from './ImageGallery'
-import { ValidationPreviewDialog } from './ValidationPreviewDialog'
 
 interface Props {
   trialId: string
@@ -17,12 +16,39 @@ const formatDateTime = (value: string | undefined) => {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
 }
 
+const PARAM_DISPLAY_ORDER = [
+  'imgsz', 'batch', 'epochs', 'patience', 'workers',
+  'optimizer', 'lr0', 'lrf', 'momentum', 'weight_decay', 'warmup_epochs', 'cos_lr',
+  'degrees', 'translate', 'scale', 'shear', 'perspective', 'flipud', 'fliplr',
+  'hsv_h', 'hsv_s', 'hsv_v',
+]
+const LOW_FREQUENCY_PARAMS = ['erasing', 'copy_paste', 'mixup', 'mosaic']
+
+const sortParamEntries = (params: Record<string, unknown>) => {
+  const commonPriority = new Map(PARAM_DISPLAY_ORDER.map((key, index) => [key, index]))
+  const lowFrequencyPriority = new Map(LOW_FREQUENCY_PARAMS.map((key, index) => [key, index]))
+  const getRank = (key: string) => {
+    const commonRank = commonPriority.get(key)
+    if (commonRank !== undefined) return commonRank
+    const lowFrequencyRank = lowFrequencyPriority.get(key)
+    return lowFrequencyRank === undefined
+      ? PARAM_DISPLAY_ORDER.length
+      : PARAM_DISPLAY_ORDER.length + 1 + lowFrequencyRank
+  }
+
+  return Object.entries(params).sort(([left], [right]) => {
+    const leftRank = getRank(left)
+    const rightRank = getRank(right)
+    if (leftRank !== rightRank) return leftRank - rightRank
+    return left.localeCompare(right)
+  })
+}
+
 export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [showExportDialog, setShowExportDialog] = useState(false)
-  const [showValidationDialog, setShowValidationDialog] = useState(false)
   const [editingName, setEditingName] = useState(false)
   const [draftName, setDraftName] = useState('')
   const [savingName, setSavingName] = useState(false)
@@ -86,6 +112,15 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
     }
   }
 
+  const openModelEvaluation = () => {
+    const params = new URLSearchParams({
+      trial_id: trialId,
+      dataset_path: String(trial.dataset_yaml || datasetAnalysis.dataset_yaml || ''),
+      imgsz: String(trial.imgsz || data?.params?.imgsz || 640),
+    })
+    window.location.hash = `#/workbench/evaluation?${params.toString()}`
+  }
+
   return (
     <>
       <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.3)', zIndex: 40 }} onClick={onClose} />
@@ -131,8 +166,8 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
             )}
           </div>
           <div className="flex gap-2">
-            <button className="btn" onClick={() => setShowValidationDialog(true)} disabled={loading}>
-              <Eye size={16} /> 验证
+            <button className="btn" onClick={openModelEvaluation} disabled={loading || !data}>
+              <ScanSearch size={16} /> 模型评估
             </button>
             <button className="btn" onClick={() => setShowExportDialog(true)} disabled={loading}>
               <Download size={16} /> 导出 ONNX
@@ -304,17 +339,13 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
 
                 <section className="flex-col gap-2">
                   <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>参数</h3>
-                  <div className="table-wrapper">
-                    <table>
-                      <tbody>
-                        {Object.entries(data.params || {}).map(([key, value]: [string, any]) => (
-                          <tr key={key}>
-                            <td className="text-muted" style={{ width: '50%' }}>{key}</td>
-                            <td>{typeof value === 'number' ? value : String(value)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="trial-params-grid">
+                    {sortParamEntries(data.params || {}).map(([key, value]) => (
+                      <div className="trial-param-item" key={key}>
+                        <span className="text-muted">{key}</span>
+                        <span className="trial-param-value">{typeof value === 'number' ? value : String(value)}</span>
+                      </div>
+                    ))}
                   </div>
                 </section>
               </div>
@@ -329,13 +360,6 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
           imgsz={Number(trial.imgsz || data?.params?.imgsz || 0)}
           defaultOutputDir={trial.default_export_dir}
           onClose={() => setShowExportDialog(false)}
-        />
-      )}
-
-      {showValidationDialog && (
-        <ValidationPreviewDialog
-          trial={{ trial_id: trialId, display_name: displayName, task_type: trial.task_type || 'detection' }}
-          onClose={() => setShowValidationDialog(false)}
         />
       )}
     </>

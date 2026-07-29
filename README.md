@@ -9,6 +9,8 @@ YOLO Platform 是一个面向工业视觉训练的 Web 平台，用来管理 YOL
 - 导入本地或远程服务器上的已有训练结果。
 - 对比 Trial 指标、训练曲线和可视化图片。
 - 用 Trial 权重执行临时验证预览，对比 label / predict 图片。
+- 使用本地或训练平台模型执行多图片推理，并按类别筛选叠加框。
+- 评估标准 YOLO、Pascal VOC 或 LabelMe 验证集，生成逐类别指标和预测 XML。
 - 导出 Trial 权重为 ONNX。
 - 在设置里清理验证预览缓存。
 
@@ -150,6 +152,12 @@ PATCH  /api/trials/{trial_id}
 POST   /api/trials/{trial_id}/validate-preview
 POST   /api/trials/{trial_id}/export-onnx
 GET    /jobs/{job_id}
+GET    /api/workbench/models
+POST   /api/workbench/sessions
+POST   /api/workbench/sessions/{session_id}/images
+POST   /api/workbench/sessions/{session_id}/infer
+POST   /api/workbench/datasets/inspect
+POST   /api/workbench/evaluations
 ```
 
 ## 测试

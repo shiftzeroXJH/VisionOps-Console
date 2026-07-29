@@ -1,6 +1,7 @@
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+.workbench_cache/
 *.sqlite-journal
 *.sqlite.empty-backup-*
 runs/
