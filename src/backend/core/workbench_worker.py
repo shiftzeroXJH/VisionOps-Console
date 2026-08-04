@@ -49,7 +49,8 @@ def main() -> int:
 def _load_model(model_path: str) -> Any:
     from ultralytics import YOLO
 
-    model = YOLO(model_path)
+    # YOLOv7 ONNX exports do not always carry enough task metadata for automatic detection.
+    model = YOLO(model_path, task="detect")
     task = str(getattr(model, "task", "detect") or "detect")
     if task not in {"detect", "detection"}:
         raise RuntimeError(f"only detection models are supported, got: {task}")
@@ -61,21 +62,86 @@ def _names(raw: Any) -> dict[int, str]:
     return _normalize_names(raw, warnings)
 
 
+def _model_default_imgsz(model: Any, model_path: str) -> int | None:
+    """Return a model-defined square input size when it is available."""
+    overrides = getattr(model, "overrides", {})
+    raw_imgsz = overrides.get("imgsz") if isinstance(overrides, dict) else None
+    if isinstance(raw_imgsz, (int, float)) and int(raw_imgsz) > 0:
+        return int(raw_imgsz)
+    if not str(model_path).lower().endswith(".onnx"):
+        return None
+    try:
+        import onnxruntime as ort
+
+        session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+        shape = session.get_inputs()[0].shape
+        height, width = shape[-2], shape[-1]
+        if isinstance(height, int) and isinstance(width, int) and height == width and height > 0:
+            return height
+    except Exception:
+        pass
+    return None
+
+
+def _adapt_yolov7_prediction(prediction: Any, class_count: int) -> Any:
+    """Convert YOLOv7 ONNX output (B, N, 5+C) to Ultralytics (B, 4+C, N)."""
+    if getattr(prediction, "ndim", 0) != 3 or class_count <= 0:
+        return prediction
+    if prediction.shape[-1] == class_count + 5:
+        prediction = prediction.transpose(-1, -2)
+    if prediction.shape[1] != class_count + 5:
+        return prediction
+    import torch
+
+    objectness = prediction[:, 4:5, :]
+    class_scores = prediction[:, 5:, :]
+    return torch.cat((prediction[:, :4, :], objectness * class_scores), dim=1)
+
+
+def _predict_with_compatible_nms(model: Any, predict_args: dict[str, Any], class_count: int) -> Any:
+    try:
+        from ultralytics.utils import nms
+    except ImportError:
+        # Keeps lightweight worker unit tests usable without the YOLO runtime installed.
+        return model.predict(**predict_args)
+
+    original_nms = nms.non_max_suppression
+
+    def compatible_nms(prediction: Any, *args: Any, **kwargs: Any) -> Any:
+        adapted = _adapt_yolov7_prediction(prediction, class_count)
+        return original_nms(adapted, *args, **kwargs)
+
+    nms.non_max_suppression = compatible_nms
+    try:
+        return model.predict(**predict_args)
+    finally:
+        nms.non_max_suppression = original_nms
+
+
 def run_inference(request: dict[str, Any]) -> dict[str, Any]:
-    model = _load_model(request["model_path"])
+    model_path = request["model_path"]
+    model = _load_model(model_path)
     model_names = _names(getattr(model, "names", {}))
+    requested_imgsz = request.get("imgsz")
+    effective_imgsz = (
+        int(requested_imgsz)
+        if requested_imgsz is not None
+        else _model_default_imgsz(model, model_path)
+    )
     output: list[dict[str, Any]] = []
     for item in request.get("images", []):
         record = {"image_id": item["image_id"], "status": "completed", "detections": [], "error": ""}
         try:
             source, normalized_roi, crop_size = _inference_source(item["path"], item.get("roi"))
-            result = model.predict(
-                source=source,
-                conf=float(request["conf"]),
-                imgsz=int(request["imgsz"]),
-                save=False,
-                verbose=False,
-            )[0]
+            predict_args = {
+                "source": source,
+                "conf": float(request["conf"]),
+                "save": False,
+                "verbose": False,
+            }
+            if effective_imgsz is not None:
+                predict_args["imgsz"] = effective_imgsz
+            result = _predict_with_compatible_nms(model, predict_args, len(model_names))[0]
             names = _names(getattr(result, "names", model_names)) or model_names
             detections = _serialize_boxes(result, names)
             record["detections"] = (

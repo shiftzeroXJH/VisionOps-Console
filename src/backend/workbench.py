@@ -266,7 +266,8 @@ class WorkbenchService:
         manifest, session_dir = self._session(session_id)
         model_path = self._resolve_model(payload)
         conf = self._number(payload.get("conf", 0.25), "conf", 0.001, 1.0)
-        imgsz = self._integer(payload.get("imgsz", 640), "imgsz", 32, 4096)
+        raw_imgsz = payload.get("imgsz")
+        imgsz = None if raw_imgsz is None else self._integer(raw_imgsz, "imgsz", 32, 4096)
         requested = payload.get("image_ids")
         image_ids = set(requested or [item["image_id"] for item in manifest["images"]])
         selected = [item for item in manifest["images"] if item["image_id"] in image_ids]

@@ -270,6 +270,7 @@ function InferenceView({ models, model, onModelChange }: { models: WorkbenchMode
   const [currentId, setCurrentId] = useState('')
   const [conf, setConf] = useState(0.25)
   const [imgsz, setImgsz] = useState(640)
+  const [autoImgsz, setAutoImgsz] = useState(true)
   const [visible, setVisible] = useState<Set<number>>(new Set())
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
@@ -318,13 +319,15 @@ function InferenceView({ models, model, onModelChange }: { models: WorkbenchMode
     setBusy(true); setError('')
     try {
       const job = await api.inferWorkbench(session.session_id, {
-        ...modelPayload(model), conf, imgsz, image_ids: all ? undefined : [currentId],
+        ...modelPayload(model), conf, imgsz: autoImgsz ? null : imgsz, image_ids: all ? undefined : [currentId],
         rois: Object.fromEntries((session.images || []).map((item) => [item.image_id, item.roi || null])),
       })
       const completed = await waitForJob<InferenceSession>(job.job_id)
       if (completed.result) {
         setSession(completed.result)
         setVisible(new Set((completed.result.classes || []).map((item) => item.class_id)))
+        const failed = (completed.result.images || []).find((item) => item.status === 'failed' && item.error)
+        if (failed) setError(`${failed.name}: ${failed.error}`)
       }
       setSession(await api.getWorkbenchSession(session.session_id) as InferenceSession)
     } catch (err) { setError(errorMessage(err, '推理失败')) } finally { setBusy(false) }
@@ -376,7 +379,8 @@ function InferenceView({ models, model, onModelChange }: { models: WorkbenchMode
       <div className="workbench-toolbar">
         <ModelSelector models={models} value={model} disabled={busy} onChange={onModelChange} />
         <label className="compact-field">conf<input className="input" type="number" min="0.001" max="1" step="0.01" value={conf} onChange={(event) => setConf(Number(event.target.value))} /></label>
-        <label className="compact-field">imgsz<input className="input" type="number" min="32" step="32" value={imgsz} onChange={(event) => setImgsz(Number(event.target.value))} /></label>
+        <label className="compact-field">imgsz<input className="input" type="number" min="32" max="4096" step="32" value={imgsz} disabled={autoImgsz} onChange={(event) => setImgsz(Number(event.target.value))} /></label>
+        <label className="switch-field" title="使用模型 checkpoint 中保存的 imgsz"><input type="checkbox" checked={autoImgsz} onChange={(event) => setAutoImgsz(event.target.checked)} />自动</label>
         <input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => { void upload(Array.from(event.target.files || [])); event.target.value = '' }} />
         <button className="btn" disabled={busy} onClick={() => fileRef.current?.click()}><ImagePlus size={16} /> 导入图片</button>
         <button className="btn btn-primary" disabled={busy || !current || !modelReady} onClick={() => void infer(false)}>{busy ? <Loader2 className="spin" size={16} /> : <Play size={16} />} 推理</button>
