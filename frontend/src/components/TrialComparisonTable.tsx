@@ -7,7 +7,7 @@ interface Props {
   onRequestDeleteTrial: (trial: { trial_id: string; display_name?: string }) => void
 }
 
-const HIGHLIGHT_METRICS = ['map50_95', 'map50', 'delta_map50_95', 'precision', 'recall'] as const
+const HIGHLIGHT_METRICS = ['fitness', 'map50_95', 'map50', 'delta_map50_95', 'precision', 'recall'] as const
 
 export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequestDeleteTrial }: Props) {
   if (!data?.rows?.length) {
@@ -16,7 +16,7 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
 
   const cols = [
     'iteration', 'display_name', 'status',
-    'map50_95', 'map50', 'delta_map50_95', 'precision', 'recall',
+    'map50_95', 'fitness', 'map50', 'delta_map50_95', 'precision', 'recall',
     'best_epoch', 'epochs_completed', 'model_display', 'imgsz', 'batch', 'lr0', 'patience',
   ]
 
@@ -40,6 +40,7 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
   const columnLabel = (key: string) => {
     const labels: Record<string, string> = {
       map50_95: `mAP50-95${metricSuffix}`,
+      fitness: 'Fitness',
       map50: `mAP50${metricSuffix}`,
       delta_map50_95: `Delta mAP50-95${metricSuffix}`,
       precision: `Precision${metricSuffix}`,
@@ -96,7 +97,11 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
       <table>
         <thead style={{ position: 'sticky', top: 0, zIndex: 10 }}>
           <tr>
-            {cols.map((col) => <th key={col}>{columnLabel(col)}</th>)}
+            {cols.map((col) => (
+              <th key={col} title={col === 'fitness' ? data.fitness_metric : undefined}>
+                {columnLabel(col)}
+              </th>
+            ))}
             <th>备注</th>
             <th>操作</th>
           </tr>

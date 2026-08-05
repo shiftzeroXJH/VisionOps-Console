@@ -5,46 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from backend.constants import PER_CLASS_METRICS_FILENAME
+from backend.core.metrics import TASK_METRIC_PROFILES, calculate_fitness, metric_column_names
 from backend.models import Summary
-
-
-TASK_METRIC_PROFILES: dict[str, dict[str, Any]] = {
-    "detection": {
-        "primary_component": "box",
-        "components": {
-            "box": {
-                "metric_suffixes": ("B", ""),
-                "train_loss": ("train/box_loss", "train/loss"),
-                "val_loss": ("val/box_loss", "val/loss"),
-            }
-        },
-    },
-    "segment": {
-        "primary_component": "mask",
-        "components": {
-            "box": {
-                "metric_suffixes": ("B", ""),
-                "train_loss": ("train/box_loss", "train/loss"),
-                "val_loss": ("val/box_loss", "val/loss"),
-            },
-            "mask": {
-                "metric_suffixes": ("M",),
-                "train_loss": ("train/seg_loss", "train/loss"),
-                "val_loss": ("val/seg_loss", "val/loss"),
-            },
-        },
-    },
-    "obb": {
-        "primary_component": "obb",
-        "components": {
-            "obb": {
-                "metric_suffixes": ("O", "B", ""),
-                "train_loss": ("train/box_loss", "train/loss"),
-                "val_loss": ("val/box_loss", "val/loss"),
-            }
-        },
-    },
-}
 
 
 def _safe_float(value: Any) -> float | None:
@@ -80,13 +42,7 @@ def _column_value(row: dict[str, Any], names: tuple[str, ...]) -> float | None:
 
 
 def _metric_column_names(metric_name: str, suffixes: tuple[str, ...]) -> tuple[str, ...]:
-    names: list[str] = []
-    for suffix in suffixes:
-        if suffix:
-            names.append(f"metrics/{metric_name}({suffix})")
-        else:
-            names.append(f"metrics/{metric_name}")
-    return tuple(names)
+    return metric_column_names(metric_name, suffixes)
 
 
 def _extract_metric_set(row: dict[str, Any], suffixes: tuple[str, ...]) -> dict[str, float | None]:
@@ -198,17 +154,16 @@ def build_summary(
     primary_component = profile["primary_component"]
     component_specs = profile["components"]
     primary_spec = component_specs[primary_component]
-    primary_metric_names = _metric_column_names("mAP50-95", primary_spec["metric_suffixes"])
-    best_map = max((_column_value(row, primary_metric_names) or 0.0 for row in rows), default=0.0)
-    best_epoch = next(
-        (
-            index + 1
-            for index, row in enumerate(rows)
-            if (_column_value(row, primary_metric_names) or 0.0) == best_map
-        ),
-        len(rows),
-    )
-    best_row = rows[best_epoch - 1]
+    scored_rows = [
+        (index, row, calculate_fitness(row, task_type))
+        for index, row in enumerate(rows)
+    ]
+    valid_scored_rows = [item for item in scored_rows if item[2] is not None]
+    if valid_scored_rows:
+        best_index, best_row, best_fitness = max(valid_scored_rows, key=lambda item: item[2])
+    else:
+        best_index, best_row, best_fitness = 0, rows[0], None
+    best_epoch = int(_column_value(best_row, ("epoch",)) or best_index + 1)
     metric_breakdown_raw = {
         component: _extract_metric_set(best_row, spec["metric_suffixes"])
         for component, spec in component_specs.items()
@@ -226,7 +181,17 @@ def build_summary(
     }
     plateau, plateau_epoch = _plateau(rows, primary_spec["metric_suffixes"])
     overfitting = _detect_overfitting(rows, primary_spec["train_loss"], primary_spec["metric_suffixes"])
-    epoch_time = _column_value(best_row, ("time", "epoch_time"))
+    total_time = _column_value(rows[-1], ("time",))
+    epoch_time = _column_value(rows[-1], ("epoch_time",))
+    if total_time is not None:
+        train_time_sec = round(total_time, 3)
+        avg_epoch_time = round(total_time / len(rows), 6)
+    elif epoch_time is not None:
+        train_time_sec = round(epoch_time * len(rows), 3)
+        avg_epoch_time = epoch_time
+    else:
+        train_time_sec = None
+        avg_epoch_time = None
     gpu_mem = _column_value(best_row, ("gpu_mem",))
     warnings: list[str] = []
     if gpu_mem and gpu_mem > 10_240:
@@ -260,12 +225,14 @@ def build_summary(
             "epochs_completed": len(rows),
             "early_stop": len(rows) < int(params["epochs"]),
             "best_epoch": best_epoch,
-            "train_time_sec": None if epoch_time is None else round(epoch_time * len(rows), 3),
+            "train_time_sec": train_time_sec,
         },
         metric_context={
             "task_type": task_type,
             "primary_component": primary_component,
             "available_components": available_components,
+            "selection_metric": profile["selection_metric"],
+            "selection_fitness": None if best_fitness is None else round(best_fitness, 6),
         },
         final_metrics={
             "precision": round(float(primary_metrics.get("precision") or 0.0), 6),
@@ -286,7 +253,7 @@ def build_summary(
         },
         warnings=warnings,
         resource={
-            "avg_epoch_time": epoch_time,
+            "avg_epoch_time": avg_epoch_time,
             "gpu_mem_peak": gpu_mem,
         },
         params=params,

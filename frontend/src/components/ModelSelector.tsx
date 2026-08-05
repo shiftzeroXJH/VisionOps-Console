@@ -7,6 +7,7 @@ export type ModelSelection = {
   trial_id: string
   checkpoint_name: string
   model_path: string
+  task_type: 'auto' | 'detection' | 'segment' | 'obb'
 }
 
 interface Props {
@@ -17,6 +18,11 @@ interface Props {
 }
 
 const modelLabel = (model: WorkbenchModel) => `${model.project} / ${model.experiment_name} / ${model.trial_name}`
+const taskLabel = (taskType: string) => ({ detection: '检测', segment: '分割', obb: 'OBB' }[taskType] || taskType)
+const normalizeModelTask = (taskType: string): ModelSelection['task_type'] => {
+  if (taskType === 'detect') return 'detection'
+  return taskType === 'detection' || taskType === 'segment' || taskType === 'obb' ? taskType : 'auto'
+}
 
 export function ModelSelector({ value, models, disabled, onChange }: Props) {
   const [open, setOpen] = useState(false)
@@ -47,6 +53,7 @@ export function ModelSelector({ value, models, disabled, onChange }: Props) {
       ...value,
       trial_id: model.trial_id,
       checkpoint_name: model.default_checkpoint || model.checkpoints[0]?.name || '',
+      task_type: normalizeModelTask(model.task_type),
     })
     setSearch('')
     setOpen(false)
@@ -62,7 +69,7 @@ export function ModelSelector({ value, models, disabled, onChange }: Props) {
     <div className="model-selector">
       <div className="segmented-control" aria-label="模型来源">
         <button className={value.model_source === 'platform' ? 'active' : ''} disabled={disabled} onClick={() => onChange({ ...value, model_source: 'platform' })}>训练平台</button>
-        <button className={value.model_source === 'local' ? 'active' : ''} disabled={disabled} onClick={() => onChange({ ...value, model_source: 'local' })}>本地路径</button>
+        <button className={value.model_source === 'local' ? 'active' : ''} disabled={disabled} onClick={() => onChange({ ...value, model_source: 'local', task_type: value.model_source === 'platform' ? 'auto' : value.task_type })}>本地路径</button>
       </div>
       {value.model_source === 'platform' ? (
         <>
@@ -91,7 +98,7 @@ export function ModelSelector({ value, models, disabled, onChange }: Props) {
                 {filteredModels.map((model) => (
                   <button key={model.trial_id} type="button" role="option" aria-selected={model.trial_id === value.trial_id} onMouseDown={(event) => event.preventDefault()} onClick={() => selectModel(model)}>
                     <span>{model.trial_name}</span>
-                    <small>{model.project} / {model.experiment_name}</small>
+                    <small>{model.project} / {model.experiment_name} · {taskLabel(model.task_type)}</small>
                     {model.trial_id === value.trial_id && <Check size={15} />}
                   </button>
                 ))}
@@ -113,7 +120,15 @@ export function ModelSelector({ value, models, disabled, onChange }: Props) {
           </select>
         </>
       ) : (
-        <input className="input model-input" value={value.model_path} disabled={disabled} placeholder="D:\models\best.pt 或 model.onnx" onChange={(event) => onChange({ ...value, model_path: event.target.value })} />
+        <>
+          <input className="input model-input" value={value.model_path} disabled={disabled} placeholder="D:\models\best.pt 或 model.onnx" onChange={(event) => onChange({ ...value, model_path: event.target.value })} />
+          <select className="input task-select" aria-label="模型任务类型" value={value.task_type} disabled={disabled} onChange={(event) => onChange({ ...value, task_type: event.target.value as ModelSelection['task_type'] })}>
+            <option value="auto">自动识别</option>
+            <option value="detection">目标检测</option>
+            <option value="segment">实例分割</option>
+            <option value="obb">旋转框 OBB</option>
+          </select>
+        </>
       )}
     </div>
   )

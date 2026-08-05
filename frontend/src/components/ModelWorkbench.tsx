@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ActivitySquare, CheckCircle2, ChevronDown, ChevronUp, FolderOpen, Home, ImagePlus, Loader2, Play, PlayCircle, ScanSearch, Settings, Trash2 } from 'lucide-react'
+import { ActivitySquare, CheckCircle2, ChevronDown, ChevronUp, FolderOpen, History, Home, ImagePlus, Loader2, Play, PlayCircle, ScanSearch, Settings, Trash2 } from 'lucide-react'
 import { api, type Detection, type WorkbenchImage, type WorkbenchModel, type WorkbenchRoi } from '../api'
 import { ModelSelector, type ModelSelection } from './ModelSelector'
 import { OverlayViewer } from './OverlayViewer'
@@ -7,9 +7,9 @@ import { SettingsDialog } from './SettingsDialog'
 
 interface Props { tab: 'inference' | 'evaluation' }
 
-const defaultModel: ModelSelection = { model_source: 'platform', trial_id: '', checkpoint_name: '', model_path: '' }
+const defaultModel: ModelSelection = { model_source: 'platform', trial_id: '', checkpoint_name: '', model_path: '', task_type: 'auto' }
 type ClassInfo = { class_id: number; class_name: string }
-type InferenceSession = { session_id: string; images: WorkbenchImage[]; classes: ClassInfo[] }
+type InferenceSession = { session_id: string; images: WorkbenchImage[]; classes: ClassInfo[]; task_type?: string | null }
 type DatasetInspection = { dataset_type: string; image_count: number; classes: Array<{ class_id?: number; class_name: string }> }
 type MetricRow = ClassInfo & { map50?: number; map50_95?: number; precision?: number; recall?: number }
 type EvaluationResult = {
@@ -19,6 +19,21 @@ type EvaluationResult = {
   metrics: Record<string, number>
   per_class_metrics: MetricRow[]
   predictions_dir: string
+  conf?: number
+  imgsz?: number
+  batch?: number
+  model_source?: 'platform' | 'local'
+  trial_id?: string
+  checkpoint_name?: string
+  model_path?: string
+  task_type?: string
+}
+type EvaluationSummary = {
+  evaluation_id: string
+  created_at?: string
+  model_path?: string
+  checkpoint_name?: string
+  image_count: number
 }
 type JobResult<T> = { status: string; result?: T; error?: string }
 type SidebarSide = 'left' | 'right'
@@ -231,9 +246,15 @@ export function ModelWorkbench({ tab }: Props) {
       setModel((current) => {
         if (!current.trial_id) return current
         const selected = result.models?.find((item) => item.trial_id === current.trial_id)
-        return selected && !current.checkpoint_name
-          ? { ...current, checkpoint_name: selected.default_checkpoint }
-          : current
+        if (!selected) return current
+        const taskType = selected.task_type === 'detect' ? 'detection' : selected.task_type
+        return {
+          ...current,
+          checkpoint_name: current.checkpoint_name || selected.default_checkpoint,
+          task_type: current.task_type === 'auto' && (taskType === 'detection' || taskType === 'segment' || taskType === 'obb')
+            ? taskType
+            : current.task_type,
+        }
       })
     }).catch(console.error)
   }, [])
@@ -259,9 +280,10 @@ export function ModelWorkbench({ tab }: Props) {
 }
 
 function modelPayload(model: ModelSelection) {
+  const task = model.task_type === 'auto' ? undefined : model.task_type
   return model.model_source === 'platform'
-    ? { model_source: 'platform', trial_id: model.trial_id, checkpoint_name: model.checkpoint_name }
-    : { model_source: 'local', model_path: model.model_path }
+    ? { model_source: 'platform', trial_id: model.trial_id, checkpoint_name: model.checkpoint_name, task_type: task }
+    : { model_source: 'local', model_path: model.model_path, task_type: task }
 }
 
 function InferenceView({ models, model, onModelChange }: { models: WorkbenchModel[]; model: ModelSelection; onModelChange: (value: ModelSelection) => void }) {
@@ -410,13 +432,41 @@ function EvaluationView({ models, model, onModelChange, initialDatasetPath, init
   const [batch, setBatch] = useState(8)
   const [visible, setVisible] = useState<Set<number>>(new Set())
   const [metricsExpanded, setMetricsExpanded] = useState(true)
+  const [evaluationHistory, setEvaluationHistory] = useState<EvaluationSummary[]>([])
+  const [selectedEvaluationId, setSelectedEvaluationId] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
+  const refreshHistory = async () => {
+    const response = await api.listWorkbenchEvaluations(datasetPath)
+    setEvaluationHistory(response.evaluations || [])
+  }
   const inspect = async () => {
     setBusy(true); setError('')
-    try { setInspection(await api.inspectWorkbenchDataset(datasetPath)) }
-    catch (err) { setInspection(null); setError(errorMessage(err, '数据集检查失败')) }
+    try {
+      setInspection(await api.inspectWorkbenchDataset(datasetPath))
+      await refreshHistory()
+    }
+    catch (err) { setInspection(null); setEvaluationHistory([]); setError(errorMessage(err, '数据集检查失败')) }
+    finally { setBusy(false) }
+  }
+  const loadEvaluation = async (evaluationId: string) => {
+    setSelectedEvaluationId(evaluationId)
+    if (!evaluationId) return
+    setBusy(true); setError('')
+    try {
+      const loaded = await api.getWorkbenchEvaluation(evaluationId, datasetPath) as EvaluationResult
+      setResult(loaded)
+      setCurrentId(loaded.images?.[0]?.image_id || '')
+      setVisible(new Set((loaded.classes || []).map((item) => item.class_id)))
+      if (typeof loaded.conf === 'number') setConf(loaded.conf)
+      if (typeof loaded.imgsz === 'number') setImgsz(loaded.imgsz)
+      if (typeof loaded.batch === 'number') setBatch(loaded.batch)
+      const taskType = loaded.task_type === 'detection' || loaded.task_type === 'segment' || loaded.task_type === 'obb' ? loaded.task_type : 'auto'
+      onModelChange(loaded.model_source === 'platform'
+        ? { model_source: 'platform', trial_id: loaded.trial_id || '', checkpoint_name: loaded.checkpoint_name || '', model_path: '', task_type: taskType }
+        : { model_source: 'local', trial_id: '', checkpoint_name: '', model_path: loaded.model_path || '', task_type: taskType })
+    } catch (err) { setError(errorMessage(err, '评估结果加载失败')) }
     finally { setBusy(false) }
   }
   const evaluate = async () => {
@@ -429,6 +479,8 @@ function EvaluationView({ models, model, onModelChange, initialDatasetPath, init
       setResult(completed.result)
       setCurrentId(completed.result.images?.[0]?.image_id || '')
       setVisible(new Set((completed.result.classes || []).map((item) => item.class_id)))
+      setSelectedEvaluationId(completed.result.evaluation_id)
+      try { await refreshHistory() } catch { /* The completed result remains usable if history refresh fails. */ }
     } catch (err) { setError(errorMessage(err, '评估失败')) } finally { setBusy(false) }
   }
   const images: WorkbenchImage[] = result?.images || []
@@ -441,7 +493,13 @@ function EvaluationView({ models, model, onModelChange, initialDatasetPath, init
     <div className={`workbench-body evaluation-body ${result ? 'has-metrics' : ''}`}>
       <div className="workbench-toolbar evaluation-toolbar">
         <ModelSelector models={models} value={model} disabled={busy} onChange={onModelChange} />
-        <label className="dataset-field">验证集路径<input className="input" value={datasetPath} placeholder="data.yaml 或图片与标注所在目录" onChange={(event) => { setDatasetPath(event.target.value); setInspection(null) }} /></label>
+        <label className="dataset-field">验证集路径<input className="input" value={datasetPath} placeholder="data.yaml 或图片与标注所在目录" onChange={(event) => { setDatasetPath(event.target.value); setInspection(null); setEvaluationHistory([]); setSelectedEvaluationId(''); setResult(null) }} /></label>
+        <label className="evaluation-history-field">评估结果
+          <span className="select-with-icon"><History size={15} /><select className="input" value={selectedEvaluationId} disabled={busy || !evaluationHistory.length} onChange={(event) => void loadEvaluation(event.target.value)}>
+            <option value="">{evaluationHistory.length ? '选择历史结果' : '暂无评估结果'}</option>
+            {evaluationHistory.map((item) => <option key={item.evaluation_id} value={item.evaluation_id}>{evaluationHistoryLabel(item)}</option>)}
+          </select></span>
+        </label>
         <label className="compact-field">结果 conf<input className="input" type="number" min="0.001" max="1" step="0.01" value={conf} onChange={(event) => setConf(Number(event.target.value))} /></label>
         <label className="compact-field">imgsz<input className="input" type="number" min="32" step="32" value={imgsz} onChange={(event) => setImgsz(Number(event.target.value))} /></label>
         <label className="compact-field">batch<input className="input" type="number" min="1" value={batch} onChange={(event) => setBatch(Number(event.target.value))} /></label>
@@ -461,6 +519,12 @@ function EvaluationView({ models, model, onModelChange, initialDatasetPath, init
       </div>
     </div>
   )
+}
+
+function evaluationHistoryLabel(item: EvaluationSummary) {
+  const timestamp = item.created_at ? new Date(item.created_at).toLocaleString() : item.evaluation_id
+  const modelName = (item.checkpoint_name || item.model_path || '').split(/[\\/]/).pop()
+  return [timestamp, modelName, `${item.image_count} 张`].filter(Boolean).join(' · ')
 }
 
 function MetricsBand({ result, expanded, onToggle }: { result: EvaluationResult; expanded: boolean; onToggle: () => void }) {

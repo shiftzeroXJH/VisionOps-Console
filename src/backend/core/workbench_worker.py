@@ -24,6 +24,15 @@ from backend.core.validation_worker import _extract_metrics
 from backend.workbench import _normalize_roi
 
 
+TASK_ALIASES = {
+    "detect": "detection",
+    "detection": "detection",
+    "seg": "segment",
+    "segment": "segment",
+    "obb": "obb",
+}
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: python -m backend.core.workbench_worker <request_json>", file=sys.stderr)
@@ -46,15 +55,37 @@ def main() -> int:
         return 1
 
 
-def _load_model(model_path: str) -> Any:
+def _normalize_task_type(raw: Any) -> str | None:
+    value = str(raw or "").strip().lower()
+    if not value or value == "auto":
+        return None
+    task_type = TASK_ALIASES.get(value)
+    if task_type is None:
+        raise RuntimeError(f"unsupported workbench task: {raw}")
+    return task_type
+
+
+def _filename_task_hint(model_path: str) -> str | None:
+    stem = Path(model_path).stem.lower().replace("_", "-")
+    tokens = {token for token in stem.split("-") if token}
+    if "obb" in tokens:
+        return "obb"
+    if "seg" in tokens or "segment" in tokens:
+        return "segment"
+    return None
+
+
+def _load_model(model_path: str, requested_task: Any = None) -> tuple[Any, str]:
     from ultralytics import YOLO
 
-    # YOLOv7 ONNX exports do not always carry enough task metadata for automatic detection.
-    model = YOLO(model_path, task="detect")
-    task = str(getattr(model, "task", "detect") or "detect")
-    if task not in {"detect", "detection"}:
-        raise RuntimeError(f"only detection models are supported, got: {task}")
-    return model
+    task_hint = _normalize_task_type(requested_task) or _filename_task_hint(model_path)
+    # Explicit task hints are important for ONNX files, whose metadata may not
+    # contain the original Ultralytics task.
+    model = YOLO(model_path, task={"detection": "detect"}.get(task_hint, task_hint)) if task_hint else YOLO(model_path)
+    task = _normalize_task_type(getattr(model, "task", "")) or task_hint or "detection"
+    if task not in {"detection", "segment", "obb"}:
+        raise RuntimeError(f"unsupported workbench model task: {task}")
+    return model, task
 
 
 def _names(raw: Any) -> dict[int, str]:
@@ -120,7 +151,7 @@ def _predict_with_compatible_nms(model: Any, predict_args: dict[str, Any], class
 
 def run_inference(request: dict[str, Any]) -> dict[str, Any]:
     model_path = request["model_path"]
-    model = _load_model(model_path)
+    model, task_type = _load_model(model_path, request.get("task_type"))
     model_names = _names(getattr(model, "names", {}))
     requested_imgsz = request.get("imgsz")
     effective_imgsz = (
@@ -141,9 +172,14 @@ def run_inference(request: dict[str, Any]) -> dict[str, Any]:
             }
             if effective_imgsz is not None:
                 predict_args["imgsz"] = effective_imgsz
-            result = _predict_with_compatible_nms(model, predict_args, len(model_names))[0]
+            prediction = (
+                _predict_with_compatible_nms(model, predict_args, len(model_names))
+                if task_type == "detection"
+                else model.predict(**predict_args)
+            )
+            result = prediction[0]
             names = _names(getattr(result, "names", model_names)) or model_names
-            detections = _serialize_boxes(result, names)
+            detections = _serialize_boxes(result, names, task_type)
             record["detections"] = (
                 [_map_roi_detection(detection, normalized_roi, crop_size) for detection in detections]
                 if normalized_roi is not None else detections
@@ -154,6 +190,7 @@ def run_inference(request: dict[str, Any]) -> dict[str, Any]:
             record["error"] = str(exc)
         output.append(record)
     return {
+        "task_type": task_type,
         "classes": [{"class_id": class_id, "class_name": name} for class_id, name in sorted(model_names.items())],
         "images": output,
     }
@@ -207,12 +244,13 @@ def _map_roi_detection(
             roi["cy"] + ux[1] * local_x + uy[1] * local_y,
         ]
 
-    polygon = [
-        map_point(detection["x1"], detection["y1"]),
-        map_point(detection["x1"], detection["y2"]),
-        map_point(detection["x2"], detection["y2"]),
-        map_point(detection["x2"], detection["y1"]),
+    source_polygon = detection.get("polygon") or [
+        [detection["x1"], detection["y1"]],
+        [detection["x1"], detection["y2"]],
+        [detection["x2"], detection["y2"]],
+        [detection["x2"], detection["y1"]],
     ]
+    polygon = [map_point(float(point[0]), float(point[1])) for point in source_polygon]
     xs = [point[0] for point in polygon]
     ys = [point[1] for point in polygon]
     return {**detection, "x1": min(xs), "y1": min(ys), "x2": max(xs), "y2": max(ys), "polygon": polygon}
@@ -277,7 +315,7 @@ def inspect_evaluation_dataset(dataset_path: Path) -> dict[str, Any]:
 def run_evaluation(request: dict[str, Any]) -> dict[str, Any]:
     dataset_path = Path(request["dataset_path"]).resolve()
     inspection = inspect_evaluation_dataset(dataset_path)
-    model = _load_model(request["model_path"])
+    model, task_type = _load_model(request["model_path"], request.get("task_type"))
     model_names = _names(getattr(model, "names", {}))
     if not model_names:
         raise RuntimeError("model has no usable class metadata")
@@ -290,7 +328,7 @@ def run_evaluation(request: dict[str, Any]) -> dict[str, Any]:
         images = _image_files(Path(inspection["image_dir"]), recursive=True)
         label_dir = Path(inspection["label_dir"])
         image_dir = Path(inspection["image_dir"])
-        label_loader = lambda image_path: _yolo_labels(image_path, image_dir, label_dir, model_names)
+        label_loader = lambda image_path: _yolo_labels(image_path, image_dir, label_dir, model_names, task_type)
     else:
         dataset_names_set = {row["class_name"] for row in inspection["classes"]}
         unknown_names = dataset_names_set - set(model_names.values())
@@ -299,7 +337,7 @@ def run_evaluation(request: dict[str, Any]) -> dict[str, Any]:
         images = _image_files(dataset_path, recursive=False)
         label_type = inspection["dataset_type"]
         adapter_dir, dataset_yaml = _build_simple_adapter(
-            dataset_path, images, label_type, model_names, request["evaluation_id"]
+            dataset_path, images, label_type, model_names, request["evaluation_id"], task_type
         )
         label_loader = lambda image_path: _simple_labels(image_path, label_type, model_names)
 
@@ -315,8 +353,8 @@ def run_evaluation(request: dict[str, Any]) -> dict[str, Any]:
             save=False,
             verbose=False,
         )
-        metrics = _extract_metrics(validation, "detection")
-        per_class = _extract_per_class_metrics(validation, "detection")
+        metrics = _extract_metrics(validation, task_type)
+        per_class = _extract_per_class_metrics(validation, task_type)
         predictions_dir = Path(inspection["dataset_root"]) / "predictions_xml" / request["evaluation_id"]
         predictions_dir.mkdir(parents=True, exist_ok=False)
         image_results: list[dict[str, Any]] = []
@@ -332,7 +370,7 @@ def run_evaluation(request: dict[str, Any]) -> dict[str, Any]:
                 verbose=False,
             )[0]
             names = _names(getattr(prediction, "names", model_names)) or model_names
-            detections = _serialize_boxes(prediction, names)
+            detections = _serialize_boxes(prediction, names, task_type)
             xml_path = predictions_dir / f"{image_path.stem}.xml"
             _write_prediction_xml(xml_path, image_path, width, height, detections)
             image_results.append(
@@ -348,6 +386,7 @@ def run_evaluation(request: dict[str, Any]) -> dict[str, Any]:
                 }
             )
         return {
+            "task_type": task_type,
             "dataset": inspection,
             "classes": _class_rows(model_names),
             "metrics": metrics,
@@ -360,12 +399,22 @@ def run_evaluation(request: dict[str, Any]) -> dict[str, Any]:
             shutil.rmtree(adapter_dir, ignore_errors=True)
 
 
-def _serialize_boxes(result: Any, names: dict[int, str]) -> list[dict[str, Any]]:
+def _serialize_boxes(result: Any, names: dict[int, str], task_type: str | None = None) -> list[dict[str, Any]]:
+    task_type = _normalize_task_type(task_type) or (
+        "obb" if getattr(result, "obb", None) is not None else
+        "segment" if getattr(result, "masks", None) is not None else
+        "detection"
+    )
+    if task_type == "obb":
+        return _serialize_obb(result, names)
+
     boxes = getattr(result, "boxes", None)
     if boxes is None:
         return []
+    box_items = list(boxes)
+    polygons = _to_list(getattr(getattr(result, "masks", None), "xy", None)) if task_type == "segment" else []
     detections: list[dict[str, Any]] = []
-    for box in boxes:
+    for index, box in enumerate(box_items):
         xyxy = _to_list(getattr(box, "xyxy", None))
         if xyxy and isinstance(xyxy[0], list):
             xyxy = xyxy[0]
@@ -374,18 +423,84 @@ def _serialize_boxes(result: Any, names: dict[int, str]) -> list[dict[str, Any]]
         if len(xyxy) < 4:
             continue
         class_id = int(classes[0]) if classes else -1
-        detections.append(
-            {
-                "class_id": class_id,
-                "class_name": names.get(class_id, f"class_{class_id}"),
-                "confidence": float(confidences[0]) if confidences else None,
-                "x1": float(xyxy[0]),
-                "y1": float(xyxy[1]),
-                "x2": float(xyxy[2]),
-                "y2": float(xyxy[3]),
-            }
+        detection = _geometry_record(
+            class_id,
+            names,
+            float(confidences[0]) if confidences else None,
+            [float(value) for value in xyxy[:4]],
+            _points_at(polygons, index),
         )
+        detections.append(detection)
     return detections
+
+
+def _serialize_obb(result: Any, names: dict[int, str]) -> list[dict[str, Any]]:
+    obb = getattr(result, "obb", None)
+    if obb is None:
+        return []
+    classes = _to_list(getattr(obb, "cls", None))
+    confidences = _to_list(getattr(obb, "conf", None))
+    polygons = _to_list(getattr(obb, "xyxyxyxy", None))
+    boxes = _to_list(getattr(obb, "xyxy", None))
+    detections: list[dict[str, Any]] = []
+    for index in range(max(len(classes), len(confidences), len(polygons), len(boxes))):
+        points = _points_at(polygons, index)
+        xyxy = _flat_box_at(boxes, index)
+        if points:
+            xs = [point[0] for point in points]
+            ys = [point[1] for point in points]
+            xyxy = [min(xs), min(ys), max(xs), max(ys)]
+        if len(xyxy) < 4:
+            continue
+        class_id = int(classes[index]) if index < len(classes) else -1
+        confidence = float(confidences[index]) if index < len(confidences) else None
+        detections.append(_geometry_record(class_id, names, confidence, xyxy[:4], points))
+    return detections
+
+
+def _geometry_record(
+    class_id: int,
+    names: dict[int, str],
+    confidence: float | None,
+    xyxy: list[float],
+    polygon: list[list[float]],
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "class_id": class_id,
+        "class_name": names.get(class_id, f"class_{class_id}"),
+        "confidence": confidence,
+        "x1": float(xyxy[0]),
+        "y1": float(xyxy[1]),
+        "x2": float(xyxy[2]),
+        "y2": float(xyxy[3]),
+    }
+    if len(polygon) >= 3:
+        record["polygon"] = polygon
+    return record
+
+
+def _points_at(values: list[Any], index: int) -> list[list[float]]:
+    if index >= len(values):
+        return []
+    value = values[index]
+    if hasattr(value, "reshape"):
+        value = value.reshape(-1, 2)
+    value = _to_list(value)
+    if value and isinstance(value[0], list):
+        return [[float(point[0]), float(point[1])] for point in value if len(point) >= 2]
+    return []
+
+
+def _flat_box_at(values: list[Any], index: int) -> list[float]:
+    if index >= len(values):
+        return []
+    value = _to_list(values[index])
+    if value and isinstance(value[0], list):
+        value = value[0]
+    try:
+        return [float(item) for item in value[:4]]
+    except (TypeError, ValueError):
+        return []
 
 
 def _simple_labels(image_path: Path, label_type: str, model_names: dict[int, str] | None = None) -> list[dict[str, Any]]:
@@ -404,6 +519,12 @@ def _simple_labels(image_path: Path, label_type: str, model_names: dict[int, str
                     "y1": float(bounds.findtext("ymin", "0")),
                     "x2": float(bounds.findtext("xmax", "0")),
                     "y2": float(bounds.findtext("ymax", "0")),
+                    "polygon": [
+                        [float(bounds.findtext("xmin", "0")), float(bounds.findtext("ymin", "0"))],
+                        [float(bounds.findtext("xmax", "0")), float(bounds.findtext("ymin", "0"))],
+                        [float(bounds.findtext("xmax", "0")), float(bounds.findtext("ymax", "0"))],
+                        [float(bounds.findtext("xmin", "0")), float(bounds.findtext("ymax", "0"))],
+                    ],
                 }
             )
     else:
@@ -418,6 +539,11 @@ def _simple_labels(image_path: Path, label_type: str, model_names: dict[int, str
                 continue
             xs = [float(point[0]) for point in points]
             ys = [float(point[1]) for point in points]
+            polygon = (
+                [[min(xs), min(ys)], [max(xs), min(ys)], [max(xs), max(ys)], [min(xs), max(ys)]]
+                if shape_type == "rectangle"
+                else [[x, y] for x, y in zip(xs, ys)]
+            )
             boxes.append(
                 {
                     "class_name": str(shape.get("label", "")).strip(),
@@ -425,6 +551,7 @@ def _simple_labels(image_path: Path, label_type: str, model_names: dict[int, str
                     "y1": min(ys),
                     "x2": max(xs),
                     "y2": max(ys),
+                    "polygon": polygon,
                 }
             )
     if model_names:
@@ -436,7 +563,13 @@ def _simple_labels(image_path: Path, label_type: str, model_names: dict[int, str
     return boxes
 
 
-def _yolo_labels(image_path: Path, image_dir: Path, label_dir: Path, names: dict[int, str]) -> list[dict[str, Any]]:
+def _yolo_labels(
+    image_path: Path,
+    image_dir: Path,
+    label_dir: Path,
+    names: dict[int, str],
+    task_type: str = "detection",
+) -> list[dict[str, Any]]:
     relative = image_path.relative_to(image_dir)
     label_path = (label_dir / relative).with_suffix(".txt")
     if not label_path.is_file():
@@ -449,7 +582,24 @@ def _yolo_labels(image_path: Path, image_dir: Path, label_dir: Path, names: dict
         if len(parts) < 5:
             continue
         class_id = int(float(parts[0]))
-        cx, cy, box_width, box_height = (float(value) for value in parts[1:5])
+        values = [float(value) for value in parts[1:]]
+        if task_type in {"segment", "obb"} and len(values) >= 6 and len(values) % 2 == 0:
+            polygon = [[values[index] * width, values[index + 1] * height] for index in range(0, len(values), 2)]
+            xs = [point[0] for point in polygon]
+            ys = [point[1] for point in polygon]
+            boxes.append(
+                {
+                    "class_id": class_id,
+                    "class_name": names.get(class_id, f"class_{class_id}"),
+                    "x1": min(xs),
+                    "y1": min(ys),
+                    "x2": max(xs),
+                    "y2": max(ys),
+                    "polygon": polygon,
+                }
+            )
+            continue
+        cx, cy, box_width, box_height = values[:4]
         boxes.append(
             {
                 "class_id": class_id,
@@ -469,6 +619,7 @@ def _build_simple_adapter(
     label_type: str,
     names: dict[int, str],
     evaluation_id: str,
+    task_type: str = "detection",
 ) -> tuple[Path, Path]:
     adapter = root / f".workbench_adapter_{evaluation_id}"
     image_dir = adapter / "images" / "val"
@@ -486,13 +637,35 @@ def _build_simple_adapter(
             width, height = image.size
         lines: list[str] = []
         for box in _simple_labels(source, label_type, names):
-            box_width = max(0.0, box["x2"] - box["x1"])
-            box_height = max(0.0, box["y2"] - box["y1"])
-            cx = box["x1"] + box_width / 2
-            cy = box["y1"] + box_height / 2
-            lines.append(
-                f"{box['class_id']} {cx / width:.8f} {cy / height:.8f} {box_width / width:.8f} {box_height / height:.8f}"
-            )
+            if task_type in {"segment", "obb"}:
+                points = box.get("polygon") or [
+                    [box["x1"], box["y1"]],
+                    [box["x2"], box["y1"]],
+                    [box["x2"], box["y2"]],
+                    [box["x1"], box["y2"]],
+                ]
+                if task_type == "obb" and len(points) != 4:
+                    points = [
+                        [box["x1"], box["y1"]],
+                        [box["x2"], box["y1"]],
+                        [box["x2"], box["y2"]],
+                        [box["x1"], box["y2"]],
+                    ]
+                lines.append(
+                    f"{box['class_id']} " + " ".join(
+                        f"{coordinate / (width if coordinate_index == 0 else height):.8f}"
+                        for point in points
+                        for coordinate_index, coordinate in enumerate(point)
+                    )
+                )
+            else:
+                box_width = max(0.0, box["x2"] - box["x1"])
+                box_height = max(0.0, box["y2"] - box["y1"])
+                cx = box["x1"] + box_width / 2
+                cy = box["y1"] + box_height / 2
+                lines.append(
+                    f"{box['class_id']} {cx / width:.8f} {cy / height:.8f} {box_width / width:.8f} {box_height / height:.8f}"
+                )
         (label_dir / Path(unique_name).with_suffix(".txt")).write_text("\n".join(lines), encoding="utf-8")
     yaml_path = adapter / "data.yaml"
     names_yaml = ", ".join(json.dumps(names[index], ensure_ascii=False) for index in sorted(names))
@@ -523,6 +696,12 @@ def _write_prediction_xml(
         ET.SubElement(bounds, "ymin").text = str(max(0, round(detection["y1"])))
         ET.SubElement(bounds, "xmax").text = str(min(width, round(detection["x2"])))
         ET.SubElement(bounds, "ymax").text = str(min(height, round(detection["y2"])))
+        if detection.get("polygon"):
+            polygon = ET.SubElement(obj, "polygon")
+            for point in detection["polygon"]:
+                item = ET.SubElement(polygon, "point")
+                ET.SubElement(item, "x").text = f"{float(point[0]):.4f}"
+                ET.SubElement(item, "y").text = f"{float(point[1]):.4f}"
     ET.ElementTree(root).write(output, encoding="utf-8", xml_declaration=True)
 
 
@@ -558,7 +737,7 @@ def _to_list(value: Any) -> list[Any]:
         value = value.numpy()
     if hasattr(value, "tolist"):
         value = value.tolist()
-    return value if isinstance(value, list) else [value]
+    return list(value) if isinstance(value, (list, tuple)) else [value]
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Activity, X } from 'lucide-react'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api'
-import { getCurveColumns, getDefaultCurveMetrics, type TaskType } from '../curveMetrics'
+import { getCurveColumns, getCurveMetricLabel, getDefaultCurveMetrics, type TaskType } from '../curveMetrics'
 
 interface Props {
   experimentId: string
@@ -125,9 +125,9 @@ export function ExperimentCurvesDialog({ experimentId, taskType, onClose }: Prop
     return (
       <div key={chartId} style={{ minHeight: 420, border: '1px solid var(--panel-border)', borderRadius: 8, padding: '1rem' }}>
         <div className="flex items-center justify-between gap-2" style={{ marginBottom: '1rem', flexWrap: 'wrap' }}>
-          <h3 style={{ fontSize: '1rem', fontWeight: 600, margin: 0 }}>{metricKey}</h3>
+          <h3 style={{ fontSize: '1rem', fontWeight: 600, margin: 0 }}>{getCurveMetricLabel(metricKey, data?.fitness_metric)}</h3>
           <select className="input" style={{ width: 360, maxWidth: '100%', height: 34, fontSize: '0.8rem' }} value={metricKey} onChange={(event) => setMetricKey(event.target.value)}>
-            {curveColumns.map((column) => <option key={column} value={column}>{column}</option>)}
+            {curveColumns.map((column) => <option key={column} value={column}>{getCurveMetricLabel(column, data?.fitness_metric)}</option>)}
           </select>
         </div>
         <ResponsiveContainer width="100%" height={350}>

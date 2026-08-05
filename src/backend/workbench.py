@@ -18,6 +18,7 @@ from backend.utils import ensure_dir, read_json, write_json
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 MODEL_EXTENSIONS = {".pt", ".onnx"}
+WORKBENCH_TASK_TYPES = {"detection", "segment", "obb"}
 CACHE_TTL = timedelta(hours=24)
 
 
@@ -105,7 +106,7 @@ class WorkbenchService:
         self.cleanup_expired()
         models: list[dict[str, Any]] = []
         for experiment in self.repo.list_experiments():
-            if experiment.task_type != "detection":
+            if experiment.task_type not in WORKBENCH_TASK_TYPES:
                 continue
             trials = sorted(
                 self.repo.list_trials(experiment.experiment_id),
@@ -123,6 +124,7 @@ class WorkbenchService:
                         "experiment_id": experiment.experiment_id,
                         "experiment_name": experiment.description,
                         "project": experiment.project,
+                        "task_type": experiment.task_type,
                         "created_at": trial.created_at,
                         "path": str(checkpoints[0]["path"]),
                         "default_checkpoint": checkpoints[0]["name"],
@@ -145,6 +147,7 @@ class WorkbenchService:
             "updated_at": _utc_now(),
             "images": [],
             "model": None,
+            "task_type": None,
             "classes": [],
         }
         write_json(session_dir / "manifest.json", manifest)
@@ -287,6 +290,7 @@ class WorkbenchService:
         request = {
             "mode": "infer",
             "model_path": str(model_path),
+            "task_type": payload.get("task_type"),
             "conf": conf,
             "imgsz": imgsz,
             "images": [
@@ -306,6 +310,7 @@ class WorkbenchService:
             item["detections"] = worker_item.get("detections", [])
             item["error"] = worker_item.get("error", "inference returned no result")
         manifest["model"] = {"path": str(model_path), "source": payload.get("model_source", "local")}
+        manifest["task_type"] = result.get("task_type") or payload.get("task_type")
         manifest["classes"] = result.get("classes", [])
         manifest["conf"] = conf
         manifest["imgsz"] = imgsz
@@ -335,6 +340,7 @@ class WorkbenchService:
             "mode": "evaluate",
             "evaluation_id": evaluation_id,
             "model_path": str(model_path),
+            "task_type": payload.get("task_type"),
             "dataset_path": str(dataset_path),
             "display_conf": display_conf,
             "imgsz": imgsz,
@@ -347,6 +353,9 @@ class WorkbenchService:
                 "created_at": _utc_now(),
                 "updated_at": _utc_now(),
                 "model_path": str(model_path),
+                "model_source": str(payload.get("model_source", "local")),
+                "trial_id": str(payload.get("trial_id", "") or ""),
+                "checkpoint_name": str(payload.get("checkpoint_name", "") or ""),
                 "dataset_path": str(dataset_path),
                 "conf": display_conf,
                 "imgsz": imgsz,
@@ -354,7 +363,70 @@ class WorkbenchService:
             }
         )
         write_json(evaluation_dir / "manifest.json", result)
+        predictions_dir = Path(str(result.get("predictions_dir", ""))).resolve()
+        dataset_root = Path(str(result.get("dataset", {}).get("dataset_root", ""))).resolve()
+        expected_dir = (dataset_root / "predictions_xml" / evaluation_id).resolve()
+        if predictions_dir != expected_dir or not predictions_dir.is_dir():
+            raise WorkbenchError("evaluation returned an invalid predictions directory")
+        write_json(predictions_dir / "manifest.json", result)
         return result
+
+    def list_evaluations(self, dataset_path: str) -> dict[str, Any]:
+        dataset_root = self._evaluation_dataset_root(dataset_path)
+        predictions_root = dataset_root / "predictions_xml"
+        evaluations: list[dict[str, Any]] = []
+        if predictions_root.is_dir():
+            for candidate in predictions_root.iterdir():
+                if not candidate.is_dir() or not self._valid_evaluation_id(candidate.name):
+                    continue
+                manifest_path = candidate / "manifest.json"
+                if not manifest_path.is_file():
+                    continue
+                try:
+                    manifest = read_json(manifest_path)
+                    if not isinstance(manifest, dict):
+                        continue
+                    if manifest.get("evaluation_id") != candidate.name:
+                        continue
+                    evaluations.append(
+                        {
+                            "evaluation_id": candidate.name,
+                            "created_at": manifest.get("created_at"),
+                            "model_path": manifest.get("model_path"),
+                            "model_source": manifest.get("model_source"),
+                            "trial_id": manifest.get("trial_id"),
+                            "checkpoint_name": manifest.get("checkpoint_name"),
+                            "task_type": manifest.get("task_type"),
+                            "conf": manifest.get("conf"),
+                            "imgsz": manifest.get("imgsz"),
+                            "batch": manifest.get("batch"),
+                            "image_count": len(manifest.get("images") or []),
+                            "metrics": manifest.get("metrics") or {},
+                        }
+                    )
+                except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                    continue
+        evaluations.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        return {"dataset_root": str(dataset_root), "evaluations": evaluations}
+
+    def get_evaluation(self, dataset_path: str, evaluation_id: str) -> dict[str, Any]:
+        if not self._valid_evaluation_id(evaluation_id):
+            raise WorkbenchError("invalid evaluation id")
+        dataset_root = self._evaluation_dataset_root(dataset_path)
+        manifest_path = dataset_root / "predictions_xml" / evaluation_id / "manifest.json"
+        if not manifest_path.is_file():
+            raise WorkbenchError("evaluation not found")
+        try:
+            manifest = read_json(manifest_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise WorkbenchError("evaluation manifest is invalid") from exc
+        if not isinstance(manifest, dict):
+            raise WorkbenchError("evaluation manifest is invalid")
+        if manifest.get("evaluation_id") != evaluation_id:
+            raise WorkbenchError("evaluation manifest id does not match its directory")
+        evaluation_dir = ensure_dir(self._evaluation_dir(evaluation_id))
+        write_json(evaluation_dir / "manifest.json", manifest)
+        return manifest
 
     def image_path(self, session_id: str, image_id: str) -> Path:
         manifest, session_dir = self._session(session_id)
@@ -466,12 +538,24 @@ class WorkbenchService:
         return read_json(manifest_path), session_dir
 
     def _evaluation_dir(self, evaluation_id: str) -> Path:
-        if not evaluation_id.startswith("eval_") or not all(char.isalnum() or char == "_" for char in evaluation_id):
+        if not self._valid_evaluation_id(evaluation_id):
             raise WorkbenchError("invalid evaluation id")
         path = (self.cache_root / "evaluations" / evaluation_id).resolve()
         if not path.is_relative_to(self.cache_root):
             raise WorkbenchError("invalid evaluation id")
         return path
+
+    def _evaluation_dataset_root(self, dataset_path: str) -> Path:
+        path = self._absolute_existing_path(dataset_path, "dataset")
+        inspection = self.inspect_dataset(str(path))
+        root = Path(str(inspection.get("dataset_root", ""))).resolve()
+        if not root.is_dir():
+            raise WorkbenchError("dataset root not found")
+        return root
+
+    @staticmethod
+    def _valid_evaluation_id(evaluation_id: str) -> bool:
+        return evaluation_id.startswith("eval_") and all(char.isalnum() or char == "_" for char in evaluation_id)
 
     @staticmethod
     def _absolute_existing_path(raw: str, label: str) -> Path:

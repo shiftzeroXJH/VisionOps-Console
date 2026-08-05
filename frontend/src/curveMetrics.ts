@@ -51,3 +51,10 @@ export const getMetricSuffix = (metricColumnName: string, taskType: TaskType): s
   if (match) return `(${match[1]})`
   return taskSuffixes(taskType).find((suffix) => suffix) ? `(${taskSuffixes(taskType)[0]})` : ''
 }
+
+export const getCurveMetricLabel = (metricColumnName: string, fitnessMetric?: string): string => {
+  if (metricColumnName === 'fitness') {
+    return fitnessMetric ? `Fitness (${fitnessMetric})` : 'Fitness'
+  }
+  return metricColumnName
+}

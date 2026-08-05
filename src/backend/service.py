@@ -34,6 +34,7 @@ from backend.core.analyzer import build_summary
 from backend.core.baseline import build_initial_params
 from backend.core.constraints import validate_param_value
 from backend.core.dataset import analyze_dataset, inspect_dataset
+from backend.core.metrics import calculate_fitness, fitness_metric
 from backend.core.trainer import (
     TrainingCancelledError,
     TrainingError,
@@ -1931,6 +1932,7 @@ class OrchestratorService:
             {"key": "source", "label": "Source"},
             {"key": "server", "label": "Location"},
             {"key": "map50_95", "label": "mAP50-95"},
+            {"key": "fitness", "label": "Fitness"},
             {"key": "map50", "label": "mAP50"},
             {"key": "precision", "label": "Precision"},
             {"key": "recall", "label": "Recall"},
@@ -1954,6 +1956,7 @@ class OrchestratorService:
                 "metric": metric,
                 "value": best_value,
             },
+            "fitness_metric": fitness_metric(config.task_type),
             "columns": columns,
             "rows": rows,
         }
@@ -2177,6 +2180,7 @@ class OrchestratorService:
     def _trial_row(self, trial: TrialRecord) -> dict[str, Any]:
         summary = read_json(trial.summary_path) if trial.summary_path and Path(trial.summary_path).exists() else {}
         final_metrics = summary.get("final_metrics", trial.metrics or {})
+        metric_context = summary.get("metric_context", {})
         delta = summary.get("delta_vs_prev", {})
         basic = summary.get("basic_info", {})
         resource = summary.get("resource", {})
@@ -2201,6 +2205,8 @@ class OrchestratorService:
             "recall": final_metrics.get("recall"),
             "map50": final_metrics.get("map50"),
             "map50_95": final_metrics.get("map50_95"),
+            "fitness": metric_context.get("selection_fitness"),
+            "fitness_metric": metric_context.get("selection_metric"),
             "delta_map50_95": delta.get("map50_95"),
             "delta_recall": delta.get("recall"),
             "best_epoch": basic.get("best_epoch"),
@@ -2239,6 +2245,7 @@ class OrchestratorService:
         return STATE_WAITING
 
     def get_experiment_curves(self, experiment_id: str) -> dict[str, Any]:
+        config = self.repo.get_experiment(experiment_id)
         trials = self.repo.list_trials(experiment_id)
         curves = {}
         trial_labels = {}
@@ -2266,11 +2273,21 @@ class OrchestratorService:
                         if math.isfinite(value):
                             cleaned_row[str(k).strip()] = int(value) if value.is_integer() else value
                     if "epoch" in cleaned_row:
+                        fitness_value = calculate_fitness(cleaned_row, config.task_type)
+                        if fitness_value is None:
+                            cleaned_row.pop("fitness", None)
+                        else:
+                            cleaned_row["fitness"] = round(fitness_value, 6)
                         trial_data.append(cleaned_row)
             curves[trial.trial_id] = trial_data
             trial_labels[trial.trial_id] = trial.display_name
 
-        return {"experiment_id": experiment_id, "curves": curves, "trial_labels": trial_labels}
+        return {
+            "experiment_id": experiment_id,
+            "curves": curves,
+            "trial_labels": trial_labels,
+            "fitness_metric": fitness_metric(config.task_type),
+        }
 
     def get_trial_visualizations(self, trial_id: str) -> dict[str, Any]:
         trial = self.repo.get_trial(trial_id)

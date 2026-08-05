@@ -36,6 +36,7 @@ export type WorkbenchModel = {
   experiment_id: string;
   experiment_name: string;
   project: string;
+  task_type: 'detection' | 'segment' | 'obb' | string;
   created_at?: string;
   path: string;
   default_checkpoint: string;
@@ -442,6 +443,20 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async listWorkbenchEvaluations(datasetPath: string) {
+    const query = new URLSearchParams({ dataset_path: datasetPath });
+    const res = await fetch(`/api/workbench/evaluations?${query.toString()}`);
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async getWorkbenchEvaluation(evaluationId: string, datasetPath: string) {
+    const query = new URLSearchParams({ dataset_path: datasetPath });
+    const res = await fetch(`/api/workbench/evaluations/${encodeURIComponent(evaluationId)}?${query.toString()}`);
     if (!res.ok) await safeThrowError(res);
     return res.json();
   }

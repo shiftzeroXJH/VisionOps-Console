@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Activity, Check, Edit2, FolderInput, RadioTower, Square, Trash2, X, Settings2 } from 'lucide-react'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api'
-import { getCurveColumns, getDefaultCurveMetrics, getMetricSuffix } from '../curveMetrics'
+import { getCurveColumns, getCurveMetricLabel, getDefaultCurveMetrics, getMetricSuffix } from '../curveMetrics'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DeleteDialog } from './DeleteDialog'
 import { ExperimentCurvesDialog } from './ExperimentCurvesDialog'
@@ -80,6 +80,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
   const [curveColumns, setCurveColumns] = useState<string[]>([])
   const [trialIds, setTrialIds] = useState<string[]>([])
   const [trialLabels, setTrialLabels] = useState<Record<string, string>>({})
+  const [curveFitnessMetric, setCurveFitnessMetric] = useState('')
   const [showCurves, setShowCurves] = useState(false)
   const [showLocalDialog, setShowLocalDialog] = useState(false)
   const [showRemoteDialog, setShowRemoteDialog] = useState(false)
@@ -111,6 +112,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
         const [defaultMap, defaultRecall] = getDefaultCurveMetrics(columns, det.experiment.task_type)
         setTrialIds(topTrials)
         setTrialLabels(curvesData.trial_labels || {})
+        setCurveFitnessMetric(curvesData.fitness_metric || '')
         setCurveColumns(columns)
         setSummaryMetricA((current) => columns.includes(current) ? current : defaultMap)
         setSummaryMetricB((current) => columns.includes(current) ? current : defaultRecall)
@@ -137,6 +139,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
         setCurveColumns([])
         setTrialIds([])
         setTrialLabels({})
+        setCurveFitnessMetric('')
       }
     } finally {
       setLoading(false)
@@ -260,12 +263,12 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
     <div className="inline-chart-card flex-1" style={{ height: 286, margin: 0, paddingBottom: 0 }}>
       <div className="flex items-center justify-between gap-2" style={{ marginBottom: '0.5rem', flexWrap: 'wrap' }}>
         <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>
-          {metricKey} (最近 5 次 Trial)
+          {getCurveMetricLabel(metricKey, curveFitnessMetric)} (最近 5 次 Trial)
         </div>
         <div className="flex items-center gap-2">
           <select className="input" style={{ width: 190, height: 34, fontSize: '0.8rem' }} value={metricKey} onChange={(event) => setMetricKey(event.target.value)}>
             {curveColumns.map((column) => (
-              <option key={column} value={column}>{column}</option>
+              <option key={column} value={column}>{getCurveMetricLabel(column, curveFitnessMetric)}</option>
             ))}
           </select>
           <button

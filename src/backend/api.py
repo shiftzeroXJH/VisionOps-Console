@@ -145,6 +145,22 @@ def create_workbench_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+@app.get("/api/workbench/evaluations")
+def list_workbench_evaluations(dataset_path: str) -> dict[str, Any]:
+    return _invoke_sync(
+        "list-workbench-evaluations",
+        lambda: service.workbench.list_evaluations(dataset_path),
+    )
+
+
+@app.get("/api/workbench/evaluations/{evaluation_id}")
+def get_workbench_evaluation(evaluation_id: str, dataset_path: str) -> dict[str, Any]:
+    return _invoke_sync(
+        "get-workbench-evaluation",
+        lambda: service.workbench.get_evaluation(dataset_path, evaluation_id),
+    )
+
+
 @app.get("/api/workbench/evaluations/{evaluation_id}/images/{image_id}/file")
 def get_workbench_evaluation_image(evaluation_id: str, image_id: str) -> FileResponse:
     try:
