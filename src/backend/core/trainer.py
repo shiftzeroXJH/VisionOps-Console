@@ -145,7 +145,9 @@ def _register_training_process(process_key: str, process: subprocess.Popen[str])
 def _unregister_training_process(process_key: str) -> bool:
     with _TRAINING_HANDLES_LOCK:
         handle = _TRAINING_HANDLES.pop(process_key, None)
-    return bool(handle and handle.cancel_requested)
+    # A stop request can race with a process that has already exited cleanly.
+    # A zero exit code means training completed and must not be relabeled as cancelled.
+    return bool(handle and handle.cancel_requested and handle.process.returncode != 0)
 
 
 def _terminate_process_tree(process: subprocess.Popen[str]) -> None:

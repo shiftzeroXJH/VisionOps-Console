@@ -975,17 +975,27 @@ class OrchestratorService:
 
     def cancel_task(self, experiment_id: str, reason: str | None = None) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)
-        if config.status in {STATE_COMPLETED, STATE_CANCELLED}:
+        trials = self.repo.list_trials(experiment_id)
+        active_states = {STATE_TRAINING, STATE_RETRAINING, STATE_ANALYZING}
+        has_active_trial = any(trial.status in active_states for trial in trials)
+        if config.status in {STATE_COMPLETED, STATE_CANCELLED} or (
+            config.status == STATE_WAITING and not has_active_trial
+        ):
+            latest_trial = trials[-1] if trials else None
             return {
                 "experiment_id": experiment_id,
-                "status": public_task_status(config.status),
+                "status": public_task_status(
+                    config.status,
+                    latest_trial.remote_training_status if latest_trial else "",
+                    latest_trial.sync_status if latest_trial else "",
+                ),
                 "internal_status": config.status,
                 "message": "task already finalized",
             }
         normalized_reason = reason or "cancelled by user"
         process_terminated = cancel_training_process(experiment_id)
-        for trial in self.repo.list_trials(experiment_id):
-            if trial.status in {STATE_TRAINING, STATE_RETRAINING, STATE_ANALYZING, STATE_WAITING}:
+        for trial in trials:
+            if trial.status in active_states:
                 self.repo.update_trial(trial.trial_id, status=STATE_CANCELLED)
         self.repo.update_experiment_status(experiment_id, STATE_CANCELLED)
         self.repo.add_event(
@@ -1214,23 +1224,6 @@ class OrchestratorService:
                 src_root=str(Path(__file__).resolve().parent.parent),
                 process_key=experiment_id,
             )
-            if self.repo.get_experiment(experiment_id).status == STATE_CANCELLED:
-                self.repo.update_trial(trial_id, status=STATE_CANCELLED)
-                self.repo.add_event(
-                    experiment_id,
-                    "TRIAL_CANCELLED",
-                    {"trial_id": trial_id, "reason": "cancelled by user"},
-                    trial_id,
-                )
-                return {
-                    "status": public_task_status(STATE_CANCELLED),
-                    "internal_status": STATE_CANCELLED,
-                    "trial_id": trial_id,
-                    "display_name": display_name,
-                    "run_dir": training_result["run_dir"],
-                    "stdout_log": training_result["stdout_log"],
-                    "stderr_log": training_result["stderr_log"],
-                }
             run_dir = training_result["run_dir"]
             previous_summary = None
             summaries = self.repo.recent_summaries(experiment_id, limit=1)
