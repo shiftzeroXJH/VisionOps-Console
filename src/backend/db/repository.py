@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.models import ExperimentConfig, GoalConfig, RemoteServer, TrialRecord
+from backend.models import ExperimentConfig, RemoteServer, TrialRecord
 from backend.utils import utc_now_iso
 
 
@@ -63,7 +63,6 @@ class Repository:
                     dataset_yaml TEXT NOT NULL,
                     pretrained_model TEXT NOT NULL,
                     save_root TEXT NOT NULL,
-                    goal_config TEXT NOT NULL,
                     status TEXT NOT NULL,
                     initial_params TEXT NOT NULL,
                     search_space TEXT NOT NULL,
@@ -140,7 +139,7 @@ class Repository:
             if "project" not in columns:
                 conn.execute("ALTER TABLE experiments ADD COLUMN project TEXT NOT NULL DEFAULT ''")
             legacy_columns = {"session_key", "auto_iterate", "confirm_timeout"}
-            if legacy_columns.intersection(columns):
+            if legacy_columns.intersection(columns) or "goal_config" in columns:
                 self._backup_database()
                 self._rebuild_experiments_table(conn)
                 columns = {
@@ -190,6 +189,30 @@ class Repository:
                 if column not in trial_columns:
                     conn.execute(f"ALTER TABLE trials ADD COLUMN {column} {definition}")
 
+            # WAITING_USER_CONFIRM was only used for the removed target-threshold
+            # flow. Keep remote uncertainty distinguishable, but complete all
+            # ordinary historical trials during the schema migration.
+            conn.execute(
+                """
+                UPDATE trials
+                SET status = 'COMPLETED'
+                WHERE status = 'WAITING_USER_CONFIRM'
+                  AND COALESCE(remote_training_status, '') <> 'maybe_stopped'
+                """
+            )
+            conn.execute(
+                """
+                UPDATE experiments
+                SET status = 'COMPLETED'
+                WHERE status = 'WAITING_USER_CONFIRM'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM trials
+                    WHERE trials.experiment_id = experiments.experiment_id
+                      AND trials.status = 'WAITING_USER_CONFIRM'
+                  )
+                """
+            )
+
     def _backup_database(self) -> None:
         if self.db_path == ":memory:":
             return
@@ -213,7 +236,6 @@ class Repository:
                 dataset_yaml TEXT NOT NULL,
                 pretrained_model TEXT NOT NULL,
                 save_root TEXT NOT NULL,
-                goal_config TEXT NOT NULL,
                 status TEXT NOT NULL,
                 initial_params TEXT NOT NULL,
                 search_space TEXT NOT NULL,
@@ -223,12 +245,12 @@ class Repository:
 
             INSERT INTO experiments_new (
                 experiment_id, description, project, task_type, dataset_root, dataset_yaml,
-                pretrained_model, save_root, goal_config, status, initial_params,
+                pretrained_model, save_root, status, initial_params,
                 search_space, stop_conditions, created_at
             )
             SELECT
                 experiment_id, description, project, task_type, dataset_root, dataset_yaml,
-                pretrained_model, save_root, goal_config, status, initial_params,
+                pretrained_model, save_root, status, initial_params,
                 search_space, stop_conditions, created_at
             FROM experiments;
 
@@ -313,9 +335,9 @@ class Repository:
                 """
                 INSERT INTO experiments (
                     experiment_id, description, project, task_type, dataset_root, dataset_yaml, pretrained_model,
-                    save_root, goal_config, status,
+                    save_root, status,
                     initial_params, search_space, stop_conditions, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     config.experiment_id,
@@ -326,7 +348,6 @@ class Repository:
                     config.dataset_yaml,
                     config.pretrained_model,
                     config.save_root,
-                    json.dumps(config.goal.__dict__),
                     config.status,
                     json.dumps(config.initial_params),
                     json.dumps(config.search_space),
@@ -352,7 +373,6 @@ class Repository:
             dataset_yaml=row["dataset_yaml"],
             pretrained_model=row["pretrained_model"],
             save_root=row["save_root"],
-            goal=GoalConfig(**json.loads(row["goal_config"])),
             status=row["status"],
             initial_params=json.loads(row["initial_params"]),
             search_space=json.loads(row["search_space"]),
@@ -408,7 +428,6 @@ class Repository:
                 dataset_yaml=row["dataset_yaml"],
                 pretrained_model=row["pretrained_model"],
                 save_root=row["save_root"],
-                goal=GoalConfig(**json.loads(row["goal_config"])),
                 status=row["status"],
                 initial_params=json.loads(row["initial_params"]),
                 search_space=json.loads(row["search_space"]),
@@ -441,7 +460,6 @@ class Repository:
                 dataset_yaml=row["dataset_yaml"],
                 pretrained_model=row["pretrained_model"],
                 save_root=row["save_root"],
-                goal=GoalConfig(**json.loads(row["goal_config"])),
                 status=row["status"],
                 initial_params=json.loads(row["initial_params"]),
                 search_space=json.loads(row["search_space"]),

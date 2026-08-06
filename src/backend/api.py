@@ -232,7 +232,6 @@ def create_experiment(payload: dict[str, Any]) -> dict[str, Any]:
             dataset_yaml=body.get("dataset_yaml"),
             pretrained=body["pretrained"],
             save_root=body["save_root"],
-            goal=body["goal"],
             initial_params=body.get("initial_params"),
         ),
     )

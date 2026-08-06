@@ -254,7 +254,8 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                         <tr><td className="text-muted">模型</td><td>{trial.model_display || trial.model || '-'}</td></tr>
                         <tr><td className="text-muted">模型来源</td><td>{trial.model_source || '-'}</td></tr>
                         <tr><td className="text-muted">参数来源</td><td>{trial.params_source || '-'}</td></tr>
-                        <tr><td className="text-muted">训练状态</td><td>{trial.remote_training_status || trial.status || '-'}</td></tr>
+                        <tr><td className="text-muted">任务状态</td><td>{trial.status || '-'}</td></tr>
+                        {trial.remote_training_status && <tr><td className="text-muted">远程训练状态</td><td>{trial.remote_training_status}</td></tr>}
                         <tr><td className="text-muted">同步状态</td><td>{trial.sync_status || '-'}</td></tr>
                         <tr><td className="text-muted">最近同步</td><td>{trial.last_synced_at || '-'}</td></tr>
                         <tr><td className="text-muted">已同步 epoch</td><td>{trial.last_synced_epoch_count ?? '-'}</td></tr>

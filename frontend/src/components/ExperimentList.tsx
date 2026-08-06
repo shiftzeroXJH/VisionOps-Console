@@ -19,15 +19,10 @@ type ExperimentGroup = {
 const UNGROUPED_PROJECT = '未分组'
 
 const statusTextMap: Record<string, string> = {
-  COMPLETED: '已完成',
-  FAILED: '训练失败',
-  CANCELLED: '已取消',
+  QUEUED: '排队中',
   TRAINING: '训练中',
-  ANALYZING: '分析中',
-  RETRAINING: '重新训练中',
-  WAITING_USER_CONFIRM: '待确认',
-  AUTO_TUNE_PENDING: '等待调参',
-  READY: '准备就绪',
+  COMPLETED: '训练完成',
+  INTERRUPTED_OR_FAILED: '任务中断/失败',
 }
 
 const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase()
@@ -160,13 +155,13 @@ export function ExperimentList({ experiments, activeId, onSelect, onExperimentUp
 
                     <div className="experiment-metrics">
                       <div className="metric-row">
-                        <span>目标指标 ({exp.goal.metric})</span>
-                        <span style={{ color: 'var(--text-main)' }}>{exp.goal.target}</span>
+                        <span>状态</span>
+                        <span style={{ color: 'var(--text-main)' }}>{statusTextMap[exp.status] || exp.status}</span>
                       </div>
                       {exp.best_metric && (
                         <div className="metric-row" style={{ marginTop: '0.25rem' }}>
-                          <span>当前最优</span>
-                          <span className={exp.best_metric.value >= exp.goal.target ? 'text-success' : 'text-warning'}>
+                          <span>当前最优 mAP50-95</span>
+                          <span style={{ color: 'var(--text-main)' }}>
                             {exp.best_metric.value.toFixed(4)}
                           </span>
                         </div>

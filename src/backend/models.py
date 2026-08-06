@@ -5,12 +5,6 @@ from typing import Any
 
 
 @dataclass
-class GoalConfig:
-    metric: str
-    target: float
-
-
-@dataclass
 class ExperimentConfig:
     experiment_id: str
     description: str
@@ -20,16 +14,13 @@ class ExperimentConfig:
     dataset_yaml: str
     pretrained_model: str
     save_root: str
-    goal: GoalConfig
     status: str
     initial_params: dict[str, Any]
     search_space: dict[str, list[Any]]
     stop_conditions: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["goal"] = asdict(self.goal)
-        return data
+        return asdict(self)
 
 
 @dataclass

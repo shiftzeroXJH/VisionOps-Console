@@ -21,8 +21,6 @@ export function CreateExperimentDialog({ existingProjects, onClose, onCreated }:
     dataset_root: '',
     pretrained: 'yolo26n.pt',
     save_root: 'runs',
-    goal_metric: 'map50_95',
-    goal_target: '0.65',
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -66,7 +64,6 @@ export function CreateExperimentDialog({ existingProjects, onClose, onCreated }:
         dataset_root: form.dataset_root,
         pretrained: form.pretrained,
         save_root: form.save_root,
-        goal: { metric: form.goal_metric, target: parseFloat(form.goal_target) },
       }
       const res = await api.createExperiment(payload)
       if (res.experiment_id) {
@@ -141,11 +138,6 @@ export function CreateExperimentDialog({ existingProjects, onClose, onCreated }:
               <label style={{ fontSize: '0.875rem' }}>初始模型 (Model)</label>
               <input required className="input" value={form.pretrained} onChange={(e) => setForm({ ...form, pretrained: e.target.value })} />
             </div>
-          </div>
-
-          <div className="flex-col gap-2">
-            <label style={{ fontSize: '0.875rem' }}>目标指标 ({form.goal_metric})</label>
-            <input type="number" step="0.01" required className="input" value={form.goal_target} onChange={(e) => setForm({ ...form, goal_target: e.target.value })} />
           </div>
 
           <div className="flex justify-end gap-2 mt-4 pt-4" style={{ borderTop: '1px solid var(--panel-border)' }}>

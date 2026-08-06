@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Activity, Check, Edit2, FolderInput, RadioTower, Square, Trash2, X, Settings2 } from 'lucide-react'
+import { Activity, Check, Edit2, FolderInput, RadioTower, Square, Trash2, X, Settings2, ZoomIn, ZoomOut } from 'lucide-react'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api'
 import { getCurveColumns, getCurveMetricLabel, getDefaultCurveMetrics, getMetricSuffix } from '../curveMetrics'
@@ -20,8 +20,6 @@ interface Props {
 
 const CANCELLABLE_STATUSES = new Set([
   'TRAINING',
-  'RETRAINING',
-  'ANALYZING',
 ])
 
 const CHART_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6']
@@ -32,7 +30,7 @@ const formatDateTime = (value: string | undefined) => {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
 }
 
-type YAxisMode = 'overview' | 'tail'
+type YAxisMode = 'overview' | 'plateau'
 
 const getYAxisDomain = (values: number[], mode: YAxisMode): [number, number] | [number, 'auto'] => {
   if (values.length === 0) return [0, 'auto']
@@ -56,12 +54,12 @@ const formatAxisTick = (value: number | string) => {
   return numeric.toFixed(4).replace(/\.?0+$/, '')
 }
 
-const getChartWindowData = (rows: any[], trialIds: string[], metricKey: string, mode: YAxisMode) => {
-  if (mode === 'overview') return rows
-  const rowsWithVisibleValues = rows.filter((point) =>
-    trialIds.some((trialId) => typeof point[`${trialId}.${metricKey}`] === 'number')
-  )
-  return rowsWithVisibleValues.slice(-Math.max(5, Math.ceil(rowsWithVisibleValues.length * 0.3)))
+const getPlatformValues = (rows: any[], trialId: string | undefined, metricKey: string) => {
+  if (!trialId) return []
+  const values = rows
+    .map((point) => point[`${trialId}.${metricKey}`])
+    .filter((value): value is number => typeof value === 'number')
+  return values.slice(-Math.max(5, Math.ceil(values.length * 0.3)))
 }
 
 const shouldOfferForceDelete = (message: string) =>
@@ -149,6 +147,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
   useEffect(() => {
     experimentIdRef.current = experimentId
     setHiddenSummaryTrials(new Set())
+    setSummaryYAxisMode('overview')
     loadData()
   }, [experimentId, loadData])
 
@@ -251,12 +250,17 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
   )
 
   const renderSummaryChart = (metricKey: string, setMetricKey: (key: string) => void) => {
-    const chartWindowData = getChartWindowData(chartData, visibleSummaryTrialIds, metricKey, summaryYAxisMode)
-    const yAxisValues = chartWindowData.flatMap((point) =>
+    const chartWindowData = chartData
+    const visibleValues = chartData.flatMap((point) =>
       visibleSummaryTrialIds
         .map((trialId) => point[`${trialId}.${metricKey}`])
         .filter((value): value is number => typeof value === 'number')
     )
+    const latestVisibleTrialId = visibleSummaryTrialIds[0] || trialIds[0]
+    const platformValues = getPlatformValues(chartData, latestVisibleTrialId, metricKey)
+    const yAxisValues = summaryYAxisMode === 'plateau' && platformValues.length > 0
+      ? platformValues
+      : visibleValues
     const yAxisDomain = getYAxisDomain(yAxisValues, summaryYAxisMode)
 
     return (
@@ -273,11 +277,11 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
           </select>
           <button
             className="btn"
-            style={{ width: 48, height: 34, padding: 0, fontSize: '0.78rem' }}
-            onClick={() => setSummaryYAxisMode((mode) => mode === 'overview' ? 'tail' : 'overview')}
-            title={summaryYAxisMode === 'overview' ? '切换到尾段范围' : '切换到总览范围'}
+            style={{ minWidth: 74, height: 34, padding: '0 0.55rem', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
+            onClick={() => setSummaryYAxisMode((mode) => mode === 'overview' ? 'plateau' : 'overview')}
+            title={summaryYAxisMode === 'overview' ? '按最新训练任务的平台期放大纵轴' : '切换回总览范围'}
           >
-            {summaryYAxisMode === 'overview' ? '尾段' : '总览'}
+            {summaryYAxisMode === 'overview' ? <><ZoomIn size={14} /> 平台期</> : <><ZoomOut size={14} /> 总览</>}
           </button>
         </div>
       </div>
@@ -285,7 +289,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
         <LineChart data={chartWindowData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.2)" vertical={false} />
           <XAxis dataKey="epoch" tick={{fontSize: 11, fill: 'var(--text-muted)'}} axisLine={false} tickLine={false} />
-          <YAxis domain={yAxisDomain} tickFormatter={formatAxisTick} tick={{fontSize: 11, fill: 'var(--text-muted)'}} axisLine={false} tickLine={false} width={52} allowDataOverflow={summaryYAxisMode === 'tail'} />
+          <YAxis domain={yAxisDomain} tickFormatter={formatAxisTick} tick={{fontSize: 11, fill: 'var(--text-muted)'}} axisLine={false} tickLine={false} width={52} allowDataOverflow={summaryYAxisMode === 'plateau'} />
           <Tooltip contentStyle={{ borderRadius: 8, border: 'none', boxShadow: 'var(--shadow-md)', background: 'rgba(255,255,255,0.95)' }} />
           <Legend content={renderSummaryLegend} />
           {visibleSummaryTrialIds.map((trialId) => {

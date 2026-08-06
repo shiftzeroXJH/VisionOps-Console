@@ -21,10 +21,15 @@ from backend.constants import (
     STATE_CANCELLED,
     STATE_COMPLETED,
     STATE_FAILED,
+    STATE_INIT,
     STATE_READY,
     STATE_RETRAINING,
     STATE_TRAINING,
     STATE_WAITING,
+    PUBLIC_STATUS_COMPLETED,
+    PUBLIC_STATUS_INTERRUPTED_OR_FAILED,
+    PUBLIC_STATUS_QUEUED,
+    PUBLIC_STATUS_TRAINING,
     STOP_CONDITIONS,
     SUMMARY_FILENAME,
     TASK_BASELINES,
@@ -42,13 +47,28 @@ from backend.core.trainer import (
     run_training,
 )
 from backend.db.repository import Repository, default_project_name
-from backend.models import ExperimentConfig, GoalConfig, RemoteServer, TrialRecord
+from backend.models import ExperimentConfig, RemoteServer, TrialRecord
 from backend.utils import ensure_dir, read_json, utc_now_iso, write_json
 from backend.workbench import WorkbenchService
 
 
 class ServiceError(RuntimeError):
     pass
+
+
+def public_task_status(status: str, remote_training_status: str = "", sync_status: str = "") -> str:
+    """Map detailed persistence states to the four user-facing task states."""
+    if remote_training_status == REMOTE_TRAINING_MAYBE_STOPPED or sync_status == REMOTE_SYNC_FAILED:
+        return PUBLIC_STATUS_INTERRUPTED_OR_FAILED
+    if status in {STATE_INIT, STATE_READY}:
+        return PUBLIC_STATUS_QUEUED
+    if status in {STATE_TRAINING, STATE_RETRAINING, STATE_ANALYZING}:
+        return PUBLIC_STATUS_TRAINING
+    if status in {STATE_COMPLETED, STATE_WAITING}:
+        return PUBLIC_STATUS_COMPLETED
+    if status in {STATE_CANCELLED, STATE_FAILED}:
+        return PUBLIC_STATUS_INTERRUPTED_OR_FAILED
+    return PUBLIC_STATUS_INTERRUPTED_OR_FAILED
 
 
 REMOTE_SOURCE = "remote_sftp"
@@ -375,11 +395,41 @@ class OrchestratorService:
             if new_repo_path.name == "yolo_state.sqlite":
                 self._migrate_legacy_db_if_needed(old_repo_path, new_repo_path)
         self.repo = Repository(repo_path)
+        self._migrate_experiment_files()
         self._bootstrap_python_setting()
         workbench_cache = None
         if repo_path == ":memory:":
             workbench_cache = Path(".workbench_cache") / "tests" / uuid4().hex
         self.workbench = WorkbenchService(self.repo, self._python_for_yolo, cache_root=workbench_cache)
+
+    def _migrate_experiment_files(self) -> None:
+        """Remove retired goal data from persisted experiment snapshots."""
+        if not hasattr(self.repo, "list_experiments"):
+            return
+        for config in self.repo.list_experiments():
+            experiment_json = Path(config.save_root) / "experiments" / config.experiment_id / EXPERIMENT_FILENAME
+            if not experiment_json.exists():
+                continue
+            try:
+                current = read_json(experiment_json)
+            except (OSError, TypeError, ValueError):
+                continue
+            if not isinstance(current, dict):
+                continue
+            if "goal" in current or current.get("status") != config.status:
+                write_json(experiment_json, config.to_dict())
+
+    def _experiment_api_payload(self, config: ExperimentConfig) -> dict[str, Any]:
+        trials = self.repo.list_trials(config.experiment_id)
+        latest_trial = trials[-1] if trials else None
+        payload = config.to_dict()
+        payload["status"] = public_task_status(
+            config.status,
+            latest_trial.remote_training_status if latest_trial else "",
+            latest_trial.sync_status if latest_trial else "",
+        )
+        payload["internal_status"] = config.status
+        return payload
 
     def _yolo_param_schema(self) -> dict[str, dict[str, str]]:
         python_executable = self._python_for_yolo()
@@ -683,7 +733,6 @@ class OrchestratorService:
         dataset_yaml: str | None,
         pretrained: str,
         save_root: str,
-        goal: dict[str, Any],
         initial_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         candidates = inspect_dataset(dataset_root)
@@ -714,7 +763,6 @@ class OrchestratorService:
             dataset_yaml=str(Path(dataset_yaml).resolve()),
             pretrained_model=resolved_pretrained,
             save_root=str(Path(save_root).resolve()),
-            goal=GoalConfig(metric=str(goal["metric"]), target=float(goal["target"])),
             status=STATE_READY,
             initial_params=build_initial_params(task_type, initial_overrides),
             search_space=SEARCH_SPACE,
@@ -724,7 +772,8 @@ class OrchestratorService:
         write_json(experiment_dir / EXPERIMENT_FILENAME, config.to_dict())
         self.repo.add_event(experiment_id, "EXPERIMENT_CREATED", config.to_dict())
         return {
-            "status": config.status,
+            "status": public_task_status(config.status),
+            "internal_status": config.status,
             "experiment_id": experiment_id,
             "description": config.description,
             "project": config.project,
@@ -739,7 +788,7 @@ class OrchestratorService:
         for config in experiments:
             trials = self.repo.list_trials(config.experiment_id)
             latest_trial = trials[-1] if trials else None
-            metric = config.goal.metric
+            metric = "map50_95"
             best_trial_info = None
             best_value = None
             for trial in trials:
@@ -757,13 +806,17 @@ class OrchestratorService:
                     "experiment_id": config.experiment_id,
                     "description": config.description,
                     "project": config.project,
-                    "status": config.status,
+                    "status": public_task_status(
+                        config.status,
+                        latest_trial.remote_training_status if latest_trial else "",
+                        latest_trial.sync_status if latest_trial else "",
+                    ),
+                    "internal_status": config.status,
                     "task_type": config.task_type,
                     "dataset_root": config.dataset_root,
                     "dataset_yaml": config.dataset_yaml,
                     "pretrained_model": config.pretrained_model,
                     "default_export_dir": self._project_default_export_dir(config.project),
-                    "goal": config.goal.__dict__,
                     "trial_count": len(trials),
                     "best_metric": best_trial_info,
                     "latest_trial": None
@@ -771,7 +824,12 @@ class OrchestratorService:
                     else {
                         "trial_id": latest_trial.trial_id,
                         "iteration": latest_trial.iteration,
-                        "status": latest_trial.status,
+                        "status": public_task_status(
+                            latest_trial.status,
+                            latest_trial.remote_training_status,
+                            latest_trial.sync_status,
+                        ),
+                        "internal_status": latest_trial.status,
                         "metrics": latest_trial.metrics,
                         "source": latest_trial.source,
                         "model": _model_basename(latest_trial.model or config.pretrained_model),
@@ -785,8 +843,9 @@ class OrchestratorService:
     def get_experiment_detail(self, experiment_id: str) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)
         trials = self.repo.list_trials(experiment_id)
+        experiment_payload = self._experiment_api_payload(config)
         return {
-            "experiment": config.to_dict(),
+            "experiment": experiment_payload,
             "trial_count": len(trials),
             "latest_params": self._latest_params(config, trials),
             "default_model": config.pretrained_model,
@@ -805,7 +864,7 @@ class OrchestratorService:
     ) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)
         if description is None and project is None:
-            return {"experiment": config.to_dict()}
+            return {"experiment": self._experiment_api_payload(config)}
 
         normalized_description = None
         if description is not None:
@@ -836,7 +895,7 @@ class OrchestratorService:
             "EXPERIMENT_UPDATED",
             {"description": config.description, "project": config.project},
         )
-        return {"experiment": config.to_dict()}
+        return {"experiment": self._experiment_api_payload(config)}
 
     def get_param_metadata(self, experiment_id: str) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)
@@ -919,7 +978,8 @@ class OrchestratorService:
         if config.status in {STATE_COMPLETED, STATE_CANCELLED}:
             return {
                 "experiment_id": experiment_id,
-                "status": config.status,
+                "status": public_task_status(config.status),
+                "internal_status": config.status,
                 "message": "task already finalized",
             }
         normalized_reason = reason or "cancelled by user"
@@ -935,7 +995,8 @@ class OrchestratorService:
         )
         return {
             "experiment_id": experiment_id,
-            "status": STATE_CANCELLED,
+            "status": public_task_status(STATE_CANCELLED),
+            "internal_status": STATE_CANCELLED,
             "reason": normalized_reason,
             "process_terminated": process_terminated,
         }
@@ -1162,7 +1223,8 @@ class OrchestratorService:
                     trial_id,
                 )
                 return {
-                    "status": STATE_CANCELLED,
+                    "status": public_task_status(STATE_CANCELLED),
+                    "internal_status": STATE_CANCELLED,
                     "trial_id": trial_id,
                     "display_name": display_name,
                     "run_dir": training_result["run_dir"],
@@ -1184,7 +1246,7 @@ class OrchestratorService:
             ).to_dict()
             summary_path = trial_dir / SUMMARY_FILENAME
             write_json(summary_path, summary)
-            next_status = self._completion_status(config, summary, len(trials) + 1)
+            next_status = STATE_COMPLETED
             self.repo.update_trial(
                 trial_id,
                 status=next_status,
@@ -1194,7 +1256,8 @@ class OrchestratorService:
             self.repo.update_experiment_status(experiment_id, next_status)
             self.repo.add_event(experiment_id, "TRIAL_COMPLETED", summary, trial_id)
             return {
-                "status": next_status,
+                "status": public_task_status(next_status),
+                "internal_status": next_status,
                 "trial_id": trial_id,
                 "display_name": display_name,
                 "run_dir": run_dir,
@@ -1213,7 +1276,8 @@ class OrchestratorService:
                 trial_id,
             )
             return {
-                "status": STATE_CANCELLED,
+                "status": public_task_status(STATE_CANCELLED),
+                "internal_status": STATE_CANCELLED,
                 "trial_id": trial_id,
                 "display_name": display_name,
                 "run_dir": str(trial_dir),
@@ -1247,6 +1311,8 @@ class OrchestratorService:
             return {
                 "trial_id": trial_id,
                 "display_name": trial.display_name,
+                "status": public_task_status(trial.status, trial.remote_training_status, trial.sync_status),
+                "internal_status": trial.status,
                 "run_dir": trial.run_dir,
                 "summary_path": trial.summary_path,
                 "source": trial.source,
@@ -1283,7 +1349,8 @@ class OrchestratorService:
             "default_export_dir": self._project_default_export_dir(config.project),
             "task_type": config.task_type,
             "iteration": trial.iteration,
-            "status": trial.status,
+            "status": public_task_status(trial.status, trial.remote_training_status, trial.sync_status),
+            "internal_status": trial.status,
             "run_dir": trial.run_dir,
             "summary_path": trial.summary_path,
             "source": trial.source,
@@ -1657,7 +1724,7 @@ class OrchestratorService:
         summary_path = trial_dir / SUMMARY_FILENAME
         write_json(trial_dir / TRIAL_CONFIG_FILENAME, trial_params)
         write_json(summary_path, summary)
-        next_status = self._completion_status(config, summary, len(self.repo.list_trials(experiment_id)) + 1)
+        next_status = STATE_COMPLETED
         trial = TrialRecord(
             trial_id=trial_id,
             display_name=display_name,
@@ -1690,7 +1757,8 @@ class OrchestratorService:
             trial_id,
         )
         return {
-            "status": next_status,
+            "status": public_task_status(next_status),
+            "internal_status": next_status,
             "trial_id": trial_id,
             "display_name": display_name,
             "run_dir": trial.run_dir,
@@ -1767,7 +1835,8 @@ class OrchestratorService:
             trial_id,
         )
         return {
-            "status": trial.status,
+            "status": public_task_status(trial.status, trial.remote_training_status),
+            "internal_status": trial.status,
             "trial_id": trial_id,
             "display_name": display_name,
             "remote_server_id": remote_server_id,
@@ -1798,7 +1867,8 @@ class OrchestratorService:
             return synced
         except ServiceError as exc:
             return {
-                "status": STATE_TRAINING,
+                "status": PUBLIC_STATUS_INTERRUPTED_OR_FAILED,
+                "internal_status": STATE_TRAINING,
                 "trial_id": registered["trial_id"],
                 "sync_status": REMOTE_SYNC_FAILED,
                 "sync_error": str(exc),
@@ -1861,7 +1931,7 @@ class OrchestratorService:
                 write_json(summary_path, summary)
                 final_metrics = summary["final_metrics"]
                 next_status = (
-                    self._completion_status(config, summary, len(self.repo.list_trials(trial.experiment_id)))
+                    STATE_COMPLETED
                     if remote_training_status == REMOTE_TRAINING_COMPLETED
                     else STATE_TRAINING
                     if remote_training_status == REMOTE_TRAINING_RUNNING
@@ -1900,7 +1970,12 @@ class OrchestratorService:
             trial_id,
         )
         return {
-            "status": next_status,
+            "status": public_task_status(
+                next_status,
+                remote_training_status,
+                REMOTE_SYNC_FAILED if sync_error else REMOTE_SYNC_SYNCED,
+            ),
+            "internal_status": next_status,
             "trial_id": trial_id,
             "sync_status": REMOTE_SYNC_SYNCED if not sync_error else REMOTE_SYNC_FAILED,
             "sync_error": sync_error,
@@ -1913,7 +1988,7 @@ class OrchestratorService:
     def compare_experiment(self, experiment_id: str) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)
         rows = [self._trial_row(trial) for trial in self.repo.list_trials(experiment_id)]
-        metric = config.goal.metric
+        metric = "map50_95"
         best_row = None
         best_value = None
         for row in rows:
@@ -1923,7 +1998,6 @@ class OrchestratorService:
                 best_row = row
         for row in rows:
             row["is_best"] = bool(best_row and row["trial_id"] == best_row["trial_id"])
-        target_reached = bool(best_value is not None and best_value >= config.goal.target)
         columns = [
             {"key": "iteration", "label": "Iteration"},
             {"key": "trial_id", "label": "Trial"},
@@ -1946,8 +2020,6 @@ class OrchestratorService:
         ]
         return {
             "experiment_id": experiment_id,
-            "goal": config.goal.__dict__,
-            "target_reached": target_reached,
             "best_trial": None
             if best_row is None
             else {
@@ -2195,7 +2267,8 @@ class OrchestratorService:
             "iteration": trial.iteration,
             "trial_id": trial.trial_id,
             "display_name": trial.display_name,
-            "status": trial.status,
+            "status": public_task_status(trial.status, trial.remote_training_status, trial.sync_status),
+            "internal_status": trial.status,
             "source": trial.source,
             "model": trial.model,
             "model_display": _model_basename(trial.model),
@@ -2224,25 +2297,6 @@ class OrchestratorService:
             "logs": self._trial_logs(trial.run_dir),
             "is_best": False,
         }
-
-    def _completion_status(
-        self,
-        config: ExperimentConfig,
-        summary: dict[str, Any],
-        total_trial_count: int,
-    ) -> str:
-        """Determine experiment status after a trial completes.
-
-        *total_trial_count* must be the **actual number of trials** that exist
-        for this experiment (not the iteration ordinal which may diverge after
-        deletions).
-        """
-        metric_value = float(summary["final_metrics"].get(config.goal.metric, 0.0))
-        if metric_value >= config.goal.target:
-            return STATE_COMPLETED
-        if total_trial_count >= int(config.stop_conditions["max_trials"]):
-            return STATE_COMPLETED
-        return STATE_WAITING
 
     def get_experiment_curves(self, experiment_id: str) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)

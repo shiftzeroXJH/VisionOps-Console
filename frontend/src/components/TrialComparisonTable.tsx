@@ -58,20 +58,16 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
   const renderStatus = (row: any) => {
     const status = row.status
     if (row.remote_training_status === 'maybe_stopped') {
-      return <span title="远程训练可能已停止"><CircleDashed size={16} className="text-warning" /></span>
+      return <span title="远程训练可能已停止"><XCircle size={16} className="text-danger" /></span>
     }
     switch (status) {
       case 'COMPLETED':
         return <CheckCircle2 size={16} className="text-success" />
-      case 'FAILED':
-      case 'CANCELLED':
+      case 'INTERRUPTED_OR_FAILED':
         return <XCircle size={16} className="text-danger" />
       case 'TRAINING':
-      case 'RETRAINING':
-      case 'ANALYZING':
         return <Loader2 size={16} className="text-warning" style={{ animation: 'spin 1s linear infinite' }} />
-      case 'WAITING_USER_CONFIRM':
-      case 'AUTO_TUNE_PENDING':
+      case 'QUEUED':
         return <CircleDashed size={16} className="text-warning" />
       default:
         return status

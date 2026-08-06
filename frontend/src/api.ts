@@ -1,8 +1,3 @@
-export type MetricGoal = {
-  metric: string;
-  target: number;
-};
-
 export type Experiment = {
   experiment_id: string;
   description: string;
@@ -13,7 +8,7 @@ export type Experiment = {
   dataset_yaml?: string;
   pretrained_model: string;
   default_export_dir?: string;
-  goal: MetricGoal;
+  internal_status?: string;
   trial_count: number;
   best_metric?: {
     trial_id: string;
@@ -25,6 +20,7 @@ export type Experiment = {
     trial_id: string;
     iteration: number;
     status: string;
+    internal_status?: string;
     created_at: string;
     [key: string]: unknown;
   };
