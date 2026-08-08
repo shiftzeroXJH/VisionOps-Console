@@ -122,6 +122,29 @@ body,
   overscroll-behavior: contain;
 }
 
+.training-queue-trigger {
+  position: relative;
+}
+
+.training-queue-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  min-width: 28px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #dc2626;
+  color: #fff;
+  border: 2px solid #f8fafc;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .main-shell {
   position: relative;
   min-width: 0;
@@ -1069,6 +1092,124 @@ tr:hover td {
   background: rgba(15, 23, 42, 0.06);
   color: var(--text-main);
   font-size: 0.875rem;
+}
+
+.training-task-dialog {
+  width: min(680px, calc(100vw - 2rem));
+  max-height: min(760px, calc(100vh - 2rem));
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  overflow: hidden;
+}
+
+.training-task-dialog .settings-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.training-capacity {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.5);
+  font-size: 0.875rem;
+}
+
+.training-task-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
+}
+
+.training-task-section:last-child {
+  overflow-y: auto;
+}
+
+.training-task-section h3 {
+  font-size: 0.9rem;
+}
+
+.training-task-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.75rem;
+  border: 1px solid #dbe3ee;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.training-task-main {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.25rem 0.6rem;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.training-task-main strong,
+.training-task-main .text-muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.training-task-main .text-muted:last-child {
+  grid-column: 2;
+  font-size: 0.76rem;
+}
+
+.training-task-state {
+  grid-row: 1 / span 2;
+  align-self: center;
+  min-width: 68px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.training-task-state.running { color: var(--primary-color); }
+.training-task-state.queued { color: var(--warning-color); }
+
+.training-task-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.training-task-actions .icon-btn {
+  width: 32px;
+  height: 32px;
+}
+
+.training-task-actions .danger { color: var(--danger-color); }
+
+.training-task-empty {
+  padding: 0.8rem;
+  border: 1px dashed #cbd5e1;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 0.84rem;
+}
+
+@media (max-width: 620px) {
+  .training-task-row { grid-template-columns: 1fr; }
+  .training-task-actions { justify-content: flex-end; }
+  .training-task-main { grid-template-columns: 1fr; }
+  .training-task-state { grid-row: auto; }
+  .training-task-main .text-muted:last-child { grid-column: auto; }
 }
 
 .validation-overlay {

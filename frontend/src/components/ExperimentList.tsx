@@ -19,6 +19,7 @@ type ExperimentGroup = {
 const UNGROUPED_PROJECT = '未分组'
 
 const statusTextMap: Record<string, string> = {
+  NOT_STARTED: '未开始',
   QUEUED: '排队中',
   TRAINING: '训练中',
   COMPLETED: '训练完成',

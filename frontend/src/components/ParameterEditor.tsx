@@ -21,6 +21,14 @@ type ExtraParam = {
   value: string
 }
 
+type ApiError = {
+  detail?: {
+    code?: string
+    running_count?: number
+    max_parallel_training_tasks?: number
+  }
+}
+
 const PARAM_GROUPS: ParamGroup[] = [
   {
     id: 'core',
@@ -102,17 +110,6 @@ const parseExtraValue = (value: string, schemaType?: string): { value?: any; err
   } catch {
     return { error: '请输入有效 JSON 值' }
   }
-}
-
-const waitForTrainingJob = async (jobId: string) => {
-  const deadline = Date.now() + 30000
-  while (Date.now() < deadline) {
-    const job = await api.getJob(jobId)
-    if (job.status === 'failed') throw new Error(job.error || '训练启动失败')
-    if (job.status === 'completed') return job
-    await new Promise((resolve) => window.setTimeout(resolve, 800))
-  }
-  return null
 }
 
 export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) {
@@ -214,8 +211,27 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
     if (!isValid || !candidate.params) return
     setLoading(true)
     try {
-      const job = await api.runTrial(experimentId, { params: candidate.params, pretrained: model, note, reason: 'Manual tuning' })
-      if (job?.job_id) await waitForTrainingJob(job.job_id)
+      try {
+        await api.runTrial(experimentId, {
+          params: candidate.params,
+          pretrained: model,
+          note,
+          reason: 'Manual tuning',
+        })
+      } catch (err: unknown) {
+        const detail = (err as ApiError)?.detail
+        if (detail?.code !== 'TRAINING_CAPACITY_REACHED') throw err
+        const running = Number(detail.running_count) || 0
+        const maximum = Number(detail.max_parallel_training_tasks) || 1
+        if (!confirm(`当前已有 ${running}/${maximum} 个训练任务运行中，是否加入排队队列？`)) return
+        await api.runTrial(experimentId, {
+          params: candidate.params,
+          pretrained: model,
+          note,
+          reason: 'Manual tuning',
+          enqueue_if_busy: true,
+        })
+      }
       setNote('')
       await onRunSuccess()
       onClose?.()

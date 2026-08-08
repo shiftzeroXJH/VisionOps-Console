@@ -1,18 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, type Experiment } from './api'
+import { api, type Experiment, type TrainingTaskList } from './api'
 import { ExperimentList } from './components/ExperimentList'
 import { Workspace } from './components/Workspace'
 import { CreateExperimentDialog } from './components/CreateExperimentDialog'
-import { Settings, ActivitySquare, Home, Plus } from 'lucide-react'
+import { Settings, ActivitySquare, Home, ListTodo, Plus } from 'lucide-react'
 import { SettingsDialog } from './components/SettingsDialog'
 import { HomePage } from './components/HomePage'
 import { ModelWorkbench } from './components/ModelWorkbench'
+import { TrainingTaskDialog } from './components/TrainingTaskDialog'
+
+const EMPTY_TRAINING_TASKS: TrainingTaskList = {
+  max_parallel_training_tasks: 1,
+  running_count: 0,
+  queued_count: 0,
+  running: [],
+  queued: [],
+}
 
 function TrainingPlatform() {
   const [experiments, setExperiments] = useState<Experiment[]>([])
   const [activeExperimentId, setActiveExperimentId] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showTrainingTasks, setShowTrainingTasks] = useState(false)
+  const [trainingTasks, setTrainingTasks] = useState<TrainingTaskList>(EMPTY_TRAINING_TASKS)
   const [loading, setLoading] = useState(true)
 
   const activeIdRef = useRef(activeExperimentId)
@@ -35,9 +46,38 @@ function TrainingPlatform() {
     }
   }, [])
 
+  const loadTrainingTasks = useCallback(async () => {
+    try {
+      setTrainingTasks(await api.getTrainingTasks())
+    } catch (err) {
+      console.error('Error loading training tasks:', err)
+    }
+  }, [])
+
+  const refreshTrainingState = useCallback(async () => {
+    await Promise.all([loadExperiments(), loadTrainingTasks()])
+  }, [loadExperiments, loadTrainingTasks])
+
   useEffect(() => {
-    loadExperiments()
-  }, [loadExperiments])
+    let cancelled = false
+    let timer: number | undefined
+    const poll = async () => {
+      await refreshTrainingState()
+      if (!cancelled) {
+        timer = window.setTimeout(poll, document.hidden ? 10000 : 2000)
+      }
+    }
+    const handleVisibilityChange = () => {
+      if (!document.hidden) void refreshTrainingState()
+    }
+    void poll()
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [refreshTrainingState])
 
   return (
     <div className="app-shell">
@@ -47,12 +87,23 @@ function TrainingPlatform() {
             <ActivitySquare size={20} />
             <span>YOLO 实验面板</span>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-1">
             <button className="btn" style={{ padding: '0.25rem 0.5rem' }} onClick={() => { window.location.hash = '#/' }} title="返回首页">
               <Home size={16} />
             </button>
             <button className="btn" style={{ padding: '0.25rem 0.5rem' }} onClick={() => setShowSettings(true)} title="设置">
               <Settings size={16} />
+            </button>
+            <button
+              className="btn training-queue-trigger"
+              style={{ padding: '0.25rem 0.5rem' }}
+              onClick={() => setShowTrainingTasks(true)}
+              title="模型训练列表"
+            >
+              <ListTodo size={16} />
+              {(trainingTasks.running_count > 0 || trainingTasks.queued_count > 0) && (
+                <span className="training-queue-badge">{trainingTasks.running_count}/{trainingTasks.queued_count}</span>
+              )}
             </button>
             <button className="btn btn-primary" style={{ padding: '0.25rem 0.5rem' }} onClick={() => setShowCreate(true)} title="创建实验">
               <Plus size={16} />
@@ -99,6 +150,17 @@ function TrainingPlatform() {
       )}
 
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
+      {showTrainingTasks && (
+        <TrainingTaskDialog
+          data={trainingTasks}
+          onClose={() => setShowTrainingTasks(false)}
+          onChanged={refreshTrainingState}
+          onSelectExperiment={(experimentId) => {
+            setActiveExperimentId(experimentId)
+            setShowTrainingTasks(false)
+          }}
+        />
+      )}
     </div>
   )
 }

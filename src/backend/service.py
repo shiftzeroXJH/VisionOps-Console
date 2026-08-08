@@ -17,17 +17,22 @@ from uuid import uuid4
 from backend.constants import (
     EXPERIMENT_FILENAME,
     SEARCH_SPACE,
+    DEFAULT_MAX_PARALLEL_TRAINING_TASKS,
+    MAX_PARALLEL_TRAINING_SETTING_KEY,
+    MAX_PARALLEL_TRAINING_TASKS_LIMIT,
     STATE_ANALYZING,
     STATE_CANCELLED,
     STATE_COMPLETED,
     STATE_FAILED,
     STATE_INIT,
+    STATE_QUEUED,
     STATE_READY,
     STATE_RETRAINING,
     STATE_TRAINING,
     STATE_WAITING,
     PUBLIC_STATUS_COMPLETED,
     PUBLIC_STATUS_INTERRUPTED_OR_FAILED,
+    PUBLIC_STATUS_NOT_STARTED,
     PUBLIC_STATUS_QUEUED,
     PUBLIC_STATUS_TRAINING,
     STOP_CONDITIONS,
@@ -61,6 +66,8 @@ def public_task_status(status: str, remote_training_status: str = "", sync_statu
     if remote_training_status == REMOTE_TRAINING_MAYBE_STOPPED or sync_status == REMOTE_SYNC_FAILED:
         return PUBLIC_STATUS_INTERRUPTED_OR_FAILED
     if status in {STATE_INIT, STATE_READY}:
+        return PUBLIC_STATUS_NOT_STARTED
+    if status == STATE_QUEUED:
         return PUBLIC_STATUS_QUEUED
     if status in {STATE_TRAINING, STATE_RETRAINING, STATE_ANALYZING}:
         return PUBLIC_STATUS_TRAINING
@@ -422,14 +429,24 @@ class OrchestratorService:
     def _experiment_api_payload(self, config: ExperimentConfig) -> dict[str, Any]:
         trials = self.repo.list_trials(config.experiment_id)
         latest_trial = trials[-1] if trials else None
+        effective_status = self._effective_experiment_status(config.experiment_id, config.status)
         payload = config.to_dict()
         payload["status"] = public_task_status(
-            config.status,
+            effective_status,
             latest_trial.remote_training_status if latest_trial else "",
             latest_trial.sync_status if latest_trial else "",
         )
-        payload["internal_status"] = config.status
+        payload["internal_status"] = effective_status
         return payload
+
+    def _effective_experiment_status(self, experiment_id: str, stored_status: str) -> str:
+        active_tasks = self.repo.list_training_tasks(("RUNNING", "QUEUED"))
+        statuses = {task.status for task in active_tasks if task.experiment_id == experiment_id}
+        if "RUNNING" in statuses:
+            return STATE_TRAINING
+        if "QUEUED" in statuses:
+            return STATE_QUEUED
+        return stored_status
 
     def _yolo_param_schema(self) -> dict[str, dict[str, str]]:
         python_executable = self._python_for_yolo()
@@ -543,9 +560,26 @@ class OrchestratorService:
             "yolo_python": configured,
             "effective_yolo_python": effective,
             "uses_default_python": not bool(configured),
+            "max_parallel_training_tasks": self._max_parallel_training_tasks(),
         }
 
-    def update_settings(self, *, yolo_python: str | None = None) -> dict[str, Any]:
+    def _max_parallel_training_tasks(self) -> int:
+        raw = self.repo.get_setting(
+            MAX_PARALLEL_TRAINING_SETTING_KEY,
+            str(DEFAULT_MAX_PARALLEL_TRAINING_TASKS),
+        )
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = DEFAULT_MAX_PARALLEL_TRAINING_TASKS
+        return max(1, min(MAX_PARALLEL_TRAINING_TASKS_LIMIT, value))
+
+    def update_settings(
+        self,
+        *,
+        yolo_python: str | None = None,
+        max_parallel_training_tasks: int | None = None,
+    ) -> dict[str, Any]:
         if yolo_python is not None:
             normalized = str(yolo_python or "").strip()
             if normalized:
@@ -556,6 +590,16 @@ class OrchestratorService:
                     raise ServiceError(f"python executable is a directory: {normalized}")
                 normalized = str(path.resolve())
             self.repo.set_setting(YOLO_PYTHON_SETTING_KEY, normalized)
+        if max_parallel_training_tasks is not None:
+            try:
+                normalized_max = int(max_parallel_training_tasks)
+            except (TypeError, ValueError) as exc:
+                raise ServiceError("max_parallel_training_tasks must be an integer") from exc
+            if not 1 <= normalized_max <= MAX_PARALLEL_TRAINING_TASKS_LIMIT:
+                raise ServiceError(
+                    f"max_parallel_training_tasks must be between 1 and {MAX_PARALLEL_TRAINING_TASKS_LIMIT}"
+                )
+            self.repo.set_setting(MAX_PARALLEL_TRAINING_SETTING_KEY, str(normalized_max))
         return self.get_settings()
 
     def _project_default_export_dir(self, project: str) -> str:
@@ -784,10 +828,21 @@ class OrchestratorService:
 
     def list_experiments(self) -> dict[str, Any]:
         experiments = self.repo.list_experiments()
+        active_training_statuses: dict[str, set[str]] = {}
+        for task in self.repo.list_training_tasks(("RUNNING", "QUEUED")):
+            active_training_statuses.setdefault(task.experiment_id, set()).add(task.status)
         items: list[dict[str, Any]] = []
         for config in experiments:
             trials = self.repo.list_trials(config.experiment_id)
             latest_trial = trials[-1] if trials else None
+            queue_statuses = active_training_statuses.get(config.experiment_id, set())
+            effective_status = (
+                STATE_TRAINING
+                if "RUNNING" in queue_statuses
+                else STATE_QUEUED
+                if "QUEUED" in queue_statuses
+                else config.status
+            )
             metric = "map50_95"
             best_trial_info = None
             best_value = None
@@ -807,11 +862,11 @@ class OrchestratorService:
                     "description": config.description,
                     "project": config.project,
                     "status": public_task_status(
-                        config.status,
+                        effective_status,
                         latest_trial.remote_training_status if latest_trial else "",
                         latest_trial.sync_status if latest_trial else "",
                     ),
-                    "internal_status": config.status,
+                    "internal_status": effective_status,
                     "task_type": config.task_type,
                     "dataset_root": config.dataset_root,
                     "dataset_yaml": config.dataset_yaml,
@@ -1030,6 +1085,7 @@ class OrchestratorService:
         files_deleted = False
         warnings: list[str] = []
 
+        self.repo.delete_training_tasks_for_experiment(experiment_id)
         deleted_trials = self.repo.delete_trials_for_experiment(experiment_id)
         deleted_events = self.repo.delete_events_for_experiment(experiment_id)
         self.repo.delete_experiment(experiment_id)
@@ -1164,16 +1220,20 @@ class OrchestratorService:
         pretrained: str | None = None,
         note: str | None = None,
         reason: str | None = None,
+        on_trial_started: Any | None = None,
     ) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)
         trials = self.repo.list_trials(experiment_id)
         iteration = self._next_iteration(trials)
-        validation = self.validate_params(experiment_id, params=params or config.initial_params)
-        if not validation["valid"]:
-            raise ServiceError(f"invalid trial params: {validation['errors']}")
-        trial_params = validation["normalized_params"]
-        trial_model = _resolve_pretrained_model(pretrained or config.pretrained_model)
-        _validate_pretrained_model(trial_model)
+        prepared = self.prepare_trial_request(
+            experiment_id,
+            params=params,
+            pretrained=pretrained,
+            note=note,
+            reason=reason,
+        )
+        trial_params = prepared["params"]
+        trial_model = prepared["pretrained"]
         dataset_analysis = analyze_dataset(config.dataset_yaml)
         display_name = self._next_trial_display_name(experiment_id, trial_model, trial_params)
         trial_id = self.repo.next_trial_id()
@@ -1188,8 +1248,8 @@ class OrchestratorService:
             status=status,
             run_dir=str(trial_dir),
             source="trained",
-            note=(note or "").strip(),
-            reason=(reason or "").strip(),
+            note=prepared["note"],
+            reason=prepared["reason"],
             model=trial_model,
             model_source="manual" if pretrained else "experiment_default",
             params_source="manual",
@@ -1197,6 +1257,8 @@ class OrchestratorService:
         )
         write_json(trial_dir / TRIAL_CONFIG_FILENAME, trial_params)
         self.repo.create_trial(trial)
+        if on_trial_started is not None:
+            on_trial_started(trial_id)
         self.repo.update_experiment_status(experiment_id, status)
         self.repo.add_event(
             experiment_id,
@@ -1280,6 +1342,28 @@ class OrchestratorService:
             self.repo.update_experiment_status(experiment_id, STATE_FAILED)
             self.repo.add_event(experiment_id, "TRIAL_FAILED", {"trial_id": trial_id, "error": str(exc)}, trial_id)
             raise ServiceError(str(exc)) from exc
+
+    def prepare_trial_request(
+        self,
+        experiment_id: str,
+        params: dict[str, Any] | None = None,
+        *,
+        pretrained: str | None = None,
+        note: str | None = None,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        config = self.repo.get_experiment(experiment_id)
+        validation = self.validate_params(experiment_id, params=params or config.initial_params)
+        if not validation["valid"]:
+            raise ServiceError(f"invalid trial params: {validation['errors']}")
+        trial_model = _resolve_pretrained_model(pretrained or config.pretrained_model)
+        _validate_pretrained_model(trial_model)
+        return {
+            "params": validation["normalized_params"],
+            "pretrained": trial_model,
+            "note": (note or "").strip(),
+            "reason": (reason or "").strip(),
+        }
 
     def get_summary(self, trial_id: str, compact: bool = False) -> dict[str, Any]:
         trial = self.repo.get_trial(trial_id)

@@ -401,7 +401,14 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
         <>
           <div className="drawer-overlay" onClick={() => setShowParameterDrawer(false)} />
           <div className="drawer-content">
-            <ParameterEditor experimentId={experimentId} onRunSuccess={loadData} onClose={() => setShowParameterDrawer(false)} />
+            <ParameterEditor
+              experimentId={experimentId}
+              onRunSuccess={async () => {
+                await loadData()
+                onExperimentUpdated?.()
+              }}
+              onClose={() => setShowParameterDrawer(false)}
+            />
           </div>
         </>
       )}

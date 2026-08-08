@@ -12,4 +12,5 @@ datasets/
 *.log
 *.pid
 __pycache__/
+*.egg-info/
 .env

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.models import ExperimentConfig, RemoteServer, TrialRecord
+from backend.models import ExperimentConfig, RemoteServer, TrainingTask, TrialRecord
 from backend.utils import utc_now_iso
 
 
@@ -128,6 +128,26 @@ class Repository:
                     value TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS training_tasks (
+                    queue_id TEXT PRIMARY KEY,
+                    experiment_id TEXT NOT NULL,
+                    params_json TEXT NOT NULL,
+                    pretrained TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
+                    reason TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    trial_id TEXT NOT NULL DEFAULT '',
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    started_at TEXT NOT NULL DEFAULT '',
+                    finished_at TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY (experiment_id) REFERENCES experiments (experiment_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_training_tasks_status_position
+                ON training_tasks (status, position, created_at);
                 """
             )
             columns = {
@@ -311,6 +331,136 @@ class Repository:
                 """,
                 (key, str(value or ""), utc_now_iso()),
             )
+
+    @staticmethod
+    def _training_task_from_row(row: sqlite3.Row) -> TrainingTask:
+        return TrainingTask(
+            queue_id=row["queue_id"],
+            experiment_id=row["experiment_id"],
+            params=json.loads(row["params_json"]),
+            pretrained=row["pretrained"],
+            note=row["note"],
+            reason=row["reason"],
+            status=row["status"],
+            position=int(row["position"]),
+            trial_id=row["trial_id"],
+            error=row["error"],
+            created_at=row["created_at"],
+            started_at=row["started_at"],
+            finished_at=row["finished_at"],
+        )
+
+    def create_training_task(self, task: TrainingTask) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO training_tasks (
+                    queue_id, experiment_id, params_json, pretrained, note, reason,
+                    status, position, trial_id, error, created_at, started_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task.queue_id,
+                    task.experiment_id,
+                    json.dumps(task.params),
+                    task.pretrained,
+                    task.note,
+                    task.reason,
+                    task.status,
+                    task.position,
+                    task.trial_id,
+                    task.error,
+                    task.created_at or utc_now_iso(),
+                    task.started_at,
+                    task.finished_at,
+                ),
+            )
+
+    def get_training_task(self, queue_id: str) -> TrainingTask:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM training_tasks WHERE queue_id = ?",
+                (queue_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"training task not found: {queue_id}")
+        return self._training_task_from_row(row)
+
+    def list_training_tasks(self, statuses: tuple[str, ...] | None = None) -> list[TrainingTask]:
+        query = "SELECT * FROM training_tasks"
+        params: list[Any] = []
+        if statuses:
+            query += f" WHERE status IN ({','.join('?' for _ in statuses)})"
+            params.extend(statuses)
+        query += " ORDER BY position ASC, created_at ASC, queue_id ASC"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._training_task_from_row(row) for row in rows]
+
+    def update_training_task(
+        self,
+        queue_id: str,
+        *,
+        status: str | None = None,
+        position: int | None = None,
+        trial_id: str | None = None,
+        error: str | None = None,
+        started_at: str | None = None,
+        finished_at: str | None = None,
+    ) -> None:
+        values_by_column = {
+            "status": status,
+            "position": position,
+            "trial_id": trial_id,
+            "error": error,
+            "started_at": started_at,
+            "finished_at": finished_at,
+        }
+        assignments: list[str] = []
+        values: list[Any] = []
+        for column, value in values_by_column.items():
+            if value is not None:
+                assignments.append(f"{column} = ?")
+                values.append(value)
+        if not assignments:
+            return
+        values.append(queue_id)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"UPDATE training_tasks SET {', '.join(assignments)} WHERE queue_id = ?",
+                values,
+            )
+        if cursor.rowcount == 0:
+            raise KeyError(f"training task not found: {queue_id}")
+
+    def reorder_queued_training_task(self, queue_id: str, target_position: int) -> None:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT queue_id FROM training_tasks WHERE status = 'QUEUED' ORDER BY position, created_at, queue_id"
+            ).fetchall()
+            queue_ids = [str(row["queue_id"]) for row in rows]
+            if queue_id not in queue_ids:
+                raise KeyError(f"queued training task not found: {queue_id}")
+            queue_ids.remove(queue_id)
+            index = max(0, min(int(target_position) - 1, len(queue_ids)))
+            queue_ids.insert(index, queue_id)
+            for position, current_id in enumerate(queue_ids, start=1):
+                conn.execute(
+                    "UPDATE training_tasks SET position = ? WHERE queue_id = ?",
+                    (position, current_id),
+                )
+
+    def next_training_task_position(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(position), 0) + 1 AS next_position FROM training_tasks WHERE status = 'QUEUED'"
+            ).fetchone()
+        return int(row["next_position"])
+
+    def delete_training_tasks_for_experiment(self, experiment_id: str) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM training_tasks WHERE experiment_id = ?", (experiment_id,))
+        return int(cursor.rowcount or 0)
 
     def trial_display_name_exists(
         self,

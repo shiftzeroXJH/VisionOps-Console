@@ -24,6 +24,7 @@ export function SettingsDialog({ onClose }: Props) {
   const [loading, setLoading] = useState(true)
   const [yoloPython, setYoloPython] = useState('')
   const [effectivePython, setEffectivePython] = useState('')
+  const [maxParallelTrainingTasks, setMaxParallelTrainingTasks] = useState(1)
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState('')
   const [saveMessage, setSaveMessage] = useState('')
@@ -39,6 +40,7 @@ export function SettingsDialog({ onClose }: Props) {
         if (cancelled) return
         setYoloPython(res.yolo_python || '')
         setEffectivePython(res.effective_yolo_python || '')
+        setMaxParallelTrainingTasks(Number(res.max_parallel_training_tasks) || 1)
       } catch (err: any) {
         if (cancelled) return
         setError(err?.detail?.error || '加载设置失败')
@@ -75,10 +77,14 @@ export function SettingsDialog({ onClose }: Props) {
     setError('')
     setSaveMessage('')
     try {
-      const res = await api.updateSettings({ yolo_python: yoloPython })
+      const res = await api.updateSettings({
+        yolo_python: yoloPython,
+        max_parallel_training_tasks: maxParallelTrainingTasks,
+      })
       setYoloPython(res.yolo_python || '')
       setEffectivePython(res.effective_yolo_python || '')
-      setSaveMessage('已保存。后续训练、验证预览、模型推理、模型评估和 ONNX 导出都会使用这个 Python。')
+      setMaxParallelTrainingTasks(Number(res.max_parallel_training_tasks) || 1)
+      setSaveMessage('已保存。新的并行限制会立即用于训练调度。')
     } catch (err: any) {
       setError(err?.detail?.error || '保存设置失败')
     } finally {
@@ -115,6 +121,23 @@ export function SettingsDialog({ onClose }: Props) {
               <code>{effectivePython || '未检测到'}</code>
             </div>
           </div>
+        </section>
+
+        <section className="settings-section settings-section-stack">
+          <label className="settings-form-block">
+            <h3>最大并行模型训练任务</h3>
+            <p className="text-muted">仅限制平台启动的本地调参训练；降低数值不会停止正在运行的任务。</p>
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={64}
+              step={1}
+              value={maxParallelTrainingTasks}
+              onChange={(event) => setMaxParallelTrainingTasks(Number(event.target.value))}
+              disabled={loading || saving}
+            />
+          </label>
           <button className="btn btn-primary" onClick={saveSettings} disabled={loading || saving}>
             <Save size={16} /> {saving ? '保存中...' : '保存设置'}
           </button>

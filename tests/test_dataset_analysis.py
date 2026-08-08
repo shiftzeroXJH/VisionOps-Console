@@ -5,10 +5,10 @@ import subprocess
 import sqlite3
 
 from backend.core.dataset import analyze_dataset
-from backend.constants import SEARCH_SPACE, STATE_READY, STOP_CONDITIONS
+from backend.constants import SEARCH_SPACE, STATE_COMPLETED, STATE_READY, STATE_WAITING, STOP_CONDITIONS
 from backend.db.repository import Repository
 from backend.service import OrchestratorService
-from backend.models import ExperimentConfig, GoalConfig, TrialRecord
+from backend.models import ExperimentConfig, TrialRecord
 
 
 def _write_file(path: Path, content: str = "") -> None:
@@ -37,7 +37,6 @@ def _create_experiment(service: OrchestratorService, tmp_path: Path, dataset_roo
         dataset_yaml=None,
         pretrained="missing-ok.pt",
         save_root=str(tmp_path / "runs"),
-        goal={"metric": "map50_95", "target": 0.9},
         initial_params={"imgsz": 224, "batch": 8, "epochs": 2, "workers": 0},
     )
     return result["experiment_id"]
@@ -286,7 +285,6 @@ def test_create_experiment_uses_explicit_project(tmp_path: Path) -> None:
         dataset_yaml=None,
         pretrained="missing-ok.pt",
         save_root=str(tmp_path / "runs"),
-        goal={"metric": "map50_95", "target": 0.9},
         initial_params={"imgsz": 224, "batch": 8, "epochs": 2, "workers": 0},
     )
 
@@ -294,7 +292,11 @@ def test_create_experiment_uses_explicit_project(tmp_path: Path) -> None:
     listed = service.list_experiments()["experiments"][0]
 
     assert created["project"] == "莫仕"
+    assert created["status"] == "NOT_STARTED"
+    assert created["internal_status"] == "READY"
     assert detail["experiment"]["project"] == "莫仕"
+    assert detail["experiment"]["status"] == "NOT_STARTED"
+    assert "goal" not in detail["experiment"]
     assert listed["project"] == "莫仕"
 
 
@@ -321,7 +323,6 @@ def test_create_experiment_defaults_project_from_description(tmp_path: Path) -> 
         dataset_yaml=None,
         pretrained="missing-ok.pt",
         save_root=str(tmp_path / "runs"),
-        goal={"metric": "map50_95", "target": 0.9},
         initial_params={"imgsz": 224, "batch": 8, "epochs": 2, "workers": 0},
     )
 
@@ -534,7 +535,7 @@ def test_validate_trial_preview_returns_result_without_db_event(tmp_path: Path, 
     assert result["conf"] == 0.2
     assert result["metrics"]["map50_95"] == 0.42
     assert result["images"][0]["filename"] == "0001_a.jpg"
-    assert result["validation_id"].startswith("val_")
+    assert result["validation_id"] == "current"
     assert service.repo.latest_event(experiment_id, "TRIAL_VALIDATION_PREVIEW") is None
     assert captured_run_kwargs["encoding"] == "utf-8"
     assert captured_run_kwargs["errors"] == "replace"
@@ -632,6 +633,8 @@ def test_repository_rebuilds_legacy_experiment_schema(tmp_path: Path) -> None:
     assert "auto_iterate" not in columns
     assert "confirm_timeout" not in columns
     assert "session_key" not in columns
+    assert "goal_config" not in columns
+    assert list(tmp_path.glob("legacy.sqlite.schema-backup-*"))
 
     repo.create_experiment(
         ExperimentConfig(
@@ -643,7 +646,6 @@ def test_repository_rebuilds_legacy_experiment_schema(tmp_path: Path) -> None:
             dataset_yaml=str(tmp_path / "data.yaml"),
             pretrained_model="yolo11n.pt",
             save_root=str(tmp_path / "runs"),
-            goal=GoalConfig(metric="map50_95", target=0.5),
             status=STATE_READY,
             initial_params={"imgsz": 640},
             search_space=SEARCH_SPACE,
@@ -651,6 +653,46 @@ def test_repository_rebuilds_legacy_experiment_schema(tmp_path: Path) -> None:
         )
     )
     assert repo.get_experiment("exp_legacy_schema").description == "legacy schema"
+
+
+def test_repository_migrates_goal_column_and_waiting_status(tmp_path: Path) -> None:
+    db_path = tmp_path / "goal.sqlite"
+    repo = Repository(db_path)
+    repo.create_experiment(
+        ExperimentConfig(
+            experiment_id="exp_goal_migration",
+            description="goal migration",
+            project="go",
+            task_type="detection",
+            dataset_root=str(tmp_path),
+            dataset_yaml=str(tmp_path / "data.yaml"),
+            pretrained_model="yolo11n.pt",
+            save_root=str(tmp_path / "runs"),
+            status="WAITING_USER_CONFIRM",
+            initial_params={},
+            search_space=SEARCH_SPACE,
+            stop_conditions=STOP_CONDITIONS,
+        )
+    )
+    repo.create_trial(
+        TrialRecord(
+            trial_id="trial_goal_migration",
+            display_name="trial_goal_migration",
+            experiment_id="exp_goal_migration",
+            iteration=1,
+            params={},
+            status="WAITING_USER_CONFIRM",
+            run_dir=str(tmp_path / "run"),
+        )
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("ALTER TABLE experiments ADD COLUMN goal_config TEXT NOT NULL DEFAULT '{}'")
+
+    migrated = Repository(db_path)
+    columns = {row[1] for row in sqlite3.connect(db_path).execute("PRAGMA table_info(experiments)").fetchall()}
+    assert "goal_config" not in columns
+    assert migrated.get_experiment("exp_goal_migration").status == "COMPLETED"
+    assert migrated.get_trial("trial_goal_migration").status == "COMPLETED"
 
 
 def test_run_trial_uses_yolo_python_for_training_worker(tmp_path: Path, monkeypatch) -> None:
@@ -686,9 +728,60 @@ def test_run_trial_uses_yolo_python_for_training_worker(tmp_path: Path, monkeypa
 
     result = service.run_trial(experiment_id)
 
-    assert result["status"] == "WAITING_USER_CONFIRM"
+    assert result["status"] == "COMPLETED"
+    assert result["internal_status"] == "COMPLETED"
     assert captured_kwargs["python_executable"] == "D:/fake/yolo/python.exe"
     assert captured_kwargs["src_root"].endswith("src")
+
+
+def test_cancel_task_does_not_relabel_completed_waiting_trial(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset_cancel_completed"
+    _write_file(dataset_root / "data.yaml", "train: images/train\nval: images/val\nnames: [part]\n")
+    service = OrchestratorService(db_path=":memory:")
+    experiment_id = _create_experiment(service, tmp_path, dataset_root)
+    service.repo.update_experiment_status(experiment_id, STATE_WAITING)
+    service.repo.create_trial(
+        TrialRecord(
+            trial_id="trial_cancel_completed",
+            display_name="trial_cancel_completed",
+            experiment_id=experiment_id,
+            iteration=1,
+            params={},
+            status=STATE_WAITING,
+            run_dir=str(tmp_path / "run"),
+            metrics={"map50_95": 0.42},
+        )
+    )
+
+    result = service.cancel_task(experiment_id)
+
+    assert result["status"] == "COMPLETED"
+    assert service.repo.get_experiment(experiment_id).status == STATE_WAITING
+    assert service.repo.get_trial("trial_cancel_completed").status == STATE_WAITING
+
+
+def test_successful_training_wins_cancel_completion_race(tmp_path: Path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset_cancel_race"
+    _write_file(dataset_root / "data.yaml", "train: images/train\nval: images/val\nnames: [part]\n")
+    service = OrchestratorService(db_path=":memory:")
+    experiment_id = _create_experiment(service, tmp_path, dataset_root)
+
+    def fake_run_training(**kwargs):
+        service.repo.update_experiment_status(experiment_id, "CANCELLED")
+        run_dir = Path(kwargs["run_dir"])
+        _write_results(run_dir, map50_95=0.55)
+        return {
+            "run_dir": str(run_dir),
+            "stdout_log": str(run_dir / "stdout.log"),
+            "stderr_log": str(run_dir / "stderr.log"),
+        }
+
+    monkeypatch.setattr("backend.service.run_training", fake_run_training)
+
+    result = service.run_trial(experiment_id)
+
+    assert result["status"] == "COMPLETED"
+    assert service.repo.list_trials(experiment_id)[0].status == STATE_COMPLETED
 
 
 def test_run_trial_rejects_missing_dataset_yaml_before_creating_trial_dir(tmp_path: Path) -> None:
@@ -707,5 +800,5 @@ def test_run_trial_rejects_missing_dataset_yaml_before_creating_trial_dir(tmp_pa
 
     experiment_run_dir = tmp_path / "runs" / "experiments" / experiment_id
     assert sorted(path.name for path in experiment_run_dir.iterdir()) == ["experiment.json"]
+    assert "goal" not in service.get_experiment_detail(experiment_id)["experiment"]
     assert service.repo.list_trials(experiment_id) == []
-

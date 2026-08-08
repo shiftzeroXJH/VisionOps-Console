@@ -26,6 +26,29 @@ export type Experiment = {
   };
 };
 
+export type TrainingTask = {
+  queue_id: string;
+  experiment_id: string;
+  experiment_name: string;
+  project: string;
+  task_type: string;
+  model: string;
+  params: Record<string, unknown>;
+  status: 'RUNNING' | 'QUEUED';
+  position: number;
+  trial_id?: string;
+  created_at: string;
+  started_at?: string;
+};
+
+export type TrainingTaskList = {
+  max_parallel_training_tasks: number;
+  running_count: number;
+  queued_count: number;
+  running: TrainingTask[];
+  queued: TrainingTask[];
+};
+
 export type WorkbenchModel = {
   trial_id: string;
   trial_name: string;
@@ -108,7 +131,7 @@ export const api = {
     return res.json();
   },
 
-  async updateSettings(payload: { yolo_python: string }) {
+  async updateSettings(payload: { yolo_python: string; max_parallel_training_tasks: number }) {
     const res = await fetch('/api/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -221,6 +244,28 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async getTrainingTasks(): Promise<TrainingTaskList> {
+    const res = await fetch('/api/training-tasks');
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async cancelTrainingTask(queueId: string) {
+    const res = await fetch(`/api/training-tasks/${queueId}/cancel`, { method: 'POST' });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async reorderTrainingTask(queueId: string, position: number) {
+    const res = await fetch(`/api/training-tasks/${queueId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position })
     });
     if (!res.ok) await safeThrowError(res);
     return res.json();

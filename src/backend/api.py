@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import os
 from pathlib import Path
 from typing import Any
@@ -12,10 +13,20 @@ import uvicorn
 from backend.service import OrchestratorService, ServiceError
 from backend.workbench import WorkbenchError
 from backend.jobs import JobStore
+from backend.training_queue import TrainingCapacityError, TrainingQueue
 
-app = FastAPI(title="yolo-platform", version="0.1.0")
 job_store = JobStore()
 service = OrchestratorService(db_path=os.environ.get("YOLO_DB_PATH"))
+training_queue = TrainingQueue(service)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    training_queue.start()
+    yield
+
+
+app = FastAPI(title="yolo-platform", version="0.1.0", lifespan=lifespan)
 
 
 def _invoke_sync(action: str, callback: Any) -> dict[str, Any]:
@@ -185,9 +196,38 @@ def get_settings() -> dict[str, Any]:
 @app.patch("/api/settings")
 def update_settings(payload: dict[str, Any]) -> dict[str, Any]:
     body = dict(payload or {})
-    return _invoke_sync(
+    result = _invoke_sync(
         "update-settings",
-        lambda: service.update_settings(yolo_python=body.get("yolo_python")),
+        lambda: service.update_settings(
+            yolo_python=body.get("yolo_python"),
+            max_parallel_training_tasks=body.get("max_parallel_training_tasks"),
+        ),
+    )
+    training_queue.notify_settings_changed()
+    return result
+
+
+@app.get("/api/training-tasks")
+def list_training_tasks() -> dict[str, Any]:
+    return _invoke_sync("list-training-tasks", training_queue.list_tasks)
+
+
+@app.post("/api/training-tasks/{queue_id}/cancel")
+def cancel_training_task(queue_id: str) -> dict[str, Any]:
+    return _invoke_sync("cancel-training-task", lambda: training_queue.cancel(queue_id))
+
+
+@app.patch("/api/training-tasks/{queue_id}")
+def reorder_training_task(queue_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload)
+    if "position" not in body:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "position is required", "action": "reorder-training-task"},
+        )
+    return _invoke_sync(
+        "reorder-training-task",
+        lambda: training_queue.reorder(queue_id, int(body["position"])),
     )
 
 
@@ -322,17 +362,30 @@ def validate_experiment_params(experiment_id: str, payload: dict[str, Any]) -> d
 @app.post("/api/experiments/{experiment_id}/trials/run")
 def run_experiment_trial(experiment_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     body = dict(payload or {})
-    return _invoke_async(
-        "run-experiment-trial",
-        experiment_id,
-        lambda: service.run_trial(
+    try:
+        return training_queue.submit(
             experiment_id,
             params=body.get("params"),
             pretrained=body.get("pretrained") or body.get("model"),
             note=body.get("note"),
             reason=body.get("reason"),
-        ),
-    )
+            enqueue_if_busy=bool(body.get("enqueue_if_busy", False)),
+        )
+    except TrainingCapacityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": str(exc),
+                "code": "TRAINING_CAPACITY_REACHED",
+                "running_count": exc.running_count,
+                "max_parallel_training_tasks": exc.max_parallel,
+            },
+        ) from exc
+    except (ServiceError, FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": str(exc), "action": "run-experiment-trial"},
+        ) from exc
 
 
 @app.post("/api/experiments/{experiment_id}/trials/import")
@@ -512,7 +565,7 @@ def main() -> None:
     if not dist.joinpath("index.html").exists():
         print(
             f"frontend build not found: {dist / 'index.html'}\n"
-            "Run `npm install` and `npm run build` in the frontend directory for deployment mode.",
+            "Run `npm ci` and `npm run build` in the frontend directory for built mode.",
         )
     host = os.environ.get("YOLO_HOST", "127.0.0.1")
     port = int(os.environ.get("YOLO_PORT", "8765"))

@@ -55,6 +55,23 @@ class TrialRecord:
 
 
 @dataclass
+class TrainingTask:
+    queue_id: str
+    experiment_id: str
+    params: dict[str, Any]
+    pretrained: str
+    note: str
+    reason: str
+    status: str
+    position: int
+    trial_id: str = ""
+    error: str = ""
+    created_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+
+
+@dataclass
 class RemoteServer:
     remote_server_id: str
     name: str

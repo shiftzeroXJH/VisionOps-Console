@@ -64,7 +64,7 @@ finally:
 
 if (-not (Test-Path -LiteralPath $frontendIndex)) {
     Write-Host "Frontend build not found: $frontendIndex"
-    Write-Host "Run: cd frontend && npm install && npm run build"
+    Write-Host "Run: cd frontend && npm ci && npm run build"
     exit 1
 }
 
