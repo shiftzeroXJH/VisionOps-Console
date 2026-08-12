@@ -200,6 +200,14 @@ def _trial_weight_path(run_dir: str) -> Path:
         raise ServiceError(f"no validation weight file found under run_dir: {run_dir}") from exc
 
 
+def _continuation_weight_path(run_dir: str) -> Path:
+    base = Path(run_dir)
+    for candidate in (base / "weights" / "last.pt", base / "last.pt"):
+        if candidate.exists() and candidate.is_file():
+            return candidate.resolve()
+    raise ServiceError(f"last.pt not found under run_dir: {run_dir}")
+
+
 def _export_filename(model_name: str) -> str:
     if model_name.lower().endswith(".onnx"):
         return model_name
@@ -1128,6 +1136,11 @@ class OrchestratorService:
             raise ServiceError(
                 f"trial {trial_id} is in status {trial.status}; wait until it finishes or use --force"
             )
+        if not force and any(
+            task.parent_trial_id == trial_id
+            for task in self.repo.list_training_tasks(("RUNNING", "QUEUED"))
+        ):
+            raise ServiceError("trial is the checkpoint source of an active continuation task")
 
         warnings: list[str] = []
         deleted_paths: list[str] = []
@@ -1220,6 +1233,8 @@ class OrchestratorService:
         pretrained: str | None = None,
         note: str | None = None,
         reason: str | None = None,
+        parent_trial_id: str = "",
+        training_mode: str = "fresh",
         on_trial_started: Any | None = None,
     ) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)
@@ -1235,7 +1250,14 @@ class OrchestratorService:
         trial_params = prepared["params"]
         trial_model = prepared["pretrained"]
         dataset_analysis = analyze_dataset(config.dataset_yaml)
-        display_name = self._next_trial_display_name(experiment_id, trial_model, trial_params)
+        parent_trial = self.repo.get_trial(parent_trial_id) if parent_trial_id else None
+        if parent_trial and parent_trial.experiment_id != experiment_id:
+            raise ServiceError("continuation parent must belong to the same experiment")
+        display_name = (
+            self._next_continuation_display_name(experiment_id, parent_trial.display_name)
+            if parent_trial
+            else self._next_trial_display_name(experiment_id, trial_model, trial_params)
+        )
         trial_id = self.repo.next_trial_id()
         trial_dir = ensure_dir(Path(config.save_root) / "experiments" / experiment_id / display_name)
         status = STATE_TRAINING if iteration == 1 else STATE_RETRAINING
@@ -1251,9 +1273,11 @@ class OrchestratorService:
             note=prepared["note"],
             reason=prepared["reason"],
             model=trial_model,
-            model_source="manual" if pretrained else "experiment_default",
-            params_source="manual",
+            model_source="continued_trial" if parent_trial else "manual" if pretrained else "experiment_default",
+            params_source="continued_trial" if parent_trial else "manual",
             dataset_analysis=dataset_analysis,
+            parent_trial_id=parent_trial_id,
+            training_mode="continued" if parent_trial else training_mode,
         )
         write_json(trial_dir / TRIAL_CONFIG_FILENAME, trial_params)
         self.repo.create_trial(trial)
@@ -1270,6 +1294,8 @@ class OrchestratorService:
                 "model": trial_model,
                 "note": trial.note,
                 "reason": trial.reason,
+                "parent_trial_id": parent_trial_id,
+                "training_mode": trial.training_mode,
             },
             trial_id,
         )
@@ -1320,6 +1346,8 @@ class OrchestratorService:
                 "stderr_log": training_result["stderr_log"],
                 "summary_path": str(summary_path),
                 "final_metrics": summary["final_metrics"],
+                "parent_trial_id": parent_trial_id,
+                "training_mode": trial.training_mode,
             }
         except TrainingCancelledError as exc:
             self.repo.update_trial(trial_id, status=STATE_CANCELLED)
@@ -1365,6 +1393,97 @@ class OrchestratorService:
             "reason": (reason or "").strip(),
         }
 
+    def get_continuation_options(self, trial_id: str) -> dict[str, Any]:
+        trial = self.repo.get_trial(trial_id)
+        config = self.repo.get_experiment(trial.experiment_id)
+        effective_params = build_initial_params(config.task_type, config.initial_params)
+        effective_params.update(trial.params)
+        completed_epochs = self._trial_completed_epochs(trial)
+        parent_lr0 = float(effective_params["lr0"])
+        lr_rule = SEARCH_SPACE["lr0"]
+        recommended_lr0 = float(
+            f"{max(float(lr_rule['min']), min(float(lr_rule['max']), parent_lr0 * 0.1)):.12g}"
+        )
+        unavailable_reason = ""
+        checkpoint = ""
+        has_active_continuation = any(
+            task.parent_trial_id == trial_id
+            for task in self.repo.list_training_tasks(("RUNNING", "QUEUED"))
+        )
+        if has_active_continuation:
+            unavailable_reason = "当前 Trial 已有续训任务正在运行或排队"
+        elif trial.remote_server_id or trial.source == REMOTE_SOURCE:
+            unavailable_reason = "远程训练记录尚未同步 last.pt"
+        elif trial.status in {STATE_TRAINING, STATE_RETRAINING, STATE_ANALYZING}:
+            unavailable_reason = "当前 Trial 仍在训练中"
+        else:
+            try:
+                checkpoint = str(_continuation_weight_path(trial.run_dir))
+            except ServiceError:
+                unavailable_reason = "训练目录中没有 last.pt"
+        return {
+            "trial_id": trial.trial_id,
+            "display_name": trial.display_name,
+            "experiment_id": trial.experiment_id,
+            "can_continue": not unavailable_reason,
+            "unavailable_reason": unavailable_reason,
+            "checkpoint": checkpoint,
+            "completed_epochs": completed_epochs,
+            "cumulative_epochs": self._cumulative_epochs(trial),
+            "defaults": {
+                "additional_epochs": int(effective_params["epochs"]),
+                "lr0": recommended_lr0,
+                "original_lr0": parent_lr0,
+                "patience": int(effective_params["patience"]),
+            },
+        }
+
+    def prepare_continuation_request(
+        self,
+        trial_id: str,
+        *,
+        additional_epochs: int,
+        lr0: float | None,
+        patience: int | None,
+        note: str | None,
+    ) -> dict[str, Any]:
+        trial = self.repo.get_trial(trial_id)
+        options = self.get_continuation_options(trial_id)
+        if not options["can_continue"]:
+            raise ServiceError(str(options["unavailable_reason"]))
+        try:
+            normalized_epochs = validate_param_value("epochs", additional_epochs)
+            normalized_lr0 = validate_param_value(
+                "lr0",
+                options["defaults"]["lr0"] if lr0 is None else lr0,
+            )
+            normalized_patience = validate_param_value(
+                "patience",
+                options["defaults"]["patience"] if patience is None else patience,
+            )
+        except ValueError as exc:
+            raise ServiceError(str(exc)) from exc
+        config = self.repo.get_experiment(trial.experiment_id)
+        params = build_initial_params(config.task_type, config.initial_params)
+        params.update(trial.params)
+        params.update(
+            {
+                "epochs": normalized_epochs,
+                "lr0": normalized_lr0,
+                "patience": normalized_patience,
+            }
+        )
+        validation = self.validate_params(trial.experiment_id, params=params)
+        if not validation["valid"]:
+            raise ServiceError(f"invalid continuation params: {validation['errors']}")
+        return {
+            "experiment_id": trial.experiment_id,
+            "params": validation["normalized_params"],
+            "pretrained": options["checkpoint"],
+            "note": (note or "").strip(),
+            "reason": f"Continue from {trial.display_name}",
+        }
+
     def get_summary(self, trial_id: str, compact: bool = False) -> dict[str, Any]:
         trial = self.repo.get_trial(trial_id)
         config = self.repo.get_experiment(trial.experiment_id)
@@ -1384,6 +1503,13 @@ class OrchestratorService:
         else:
             summary = read_json(trial.summary_path)
         logs = self._trial_logs(trial.run_dir)
+        continuation = self.get_continuation_options(trial_id)
+        parent_display_name = ""
+        if trial.parent_trial_id:
+            try:
+                parent_display_name = self.repo.get_trial(trial.parent_trial_id).display_name
+            except KeyError:
+                parent_display_name = trial.parent_trial_id
         if compact:
             return {
                 "trial_id": trial_id,
@@ -1417,6 +1543,11 @@ class OrchestratorService:
                 "training_dynamics": summary.get("training_dynamics", {}),
                 "warnings": summary.get("warnings", []),
                 "dataset_analysis": trial.dataset_analysis,
+                "parent_trial_id": trial.parent_trial_id,
+                "parent_display_name": parent_display_name,
+                "training_mode": trial.training_mode,
+                "cumulative_epochs": continuation["cumulative_epochs"],
+                "continuation": continuation,
             }
         summary["trial"] = {
             "trial_id": trial.trial_id,
@@ -1448,8 +1579,13 @@ class OrchestratorService:
             "logs": logs,
             "imgsz": int(summary.get("params", {}).get("imgsz") or trial.params.get("imgsz") or 0),
             "dataset_yaml": config.dataset_yaml,
+            "parent_trial_id": trial.parent_trial_id,
+            "parent_display_name": parent_display_name,
+            "training_mode": trial.training_mode,
+            "cumulative_epochs": continuation["cumulative_epochs"],
         }
         summary["dataset_analysis"] = trial.dataset_analysis
+        summary["continuation"] = continuation
         return summary
 
     def rename_trial(self, trial_id: str, display_name: str) -> dict[str, Any]:
@@ -2090,6 +2226,8 @@ class OrchestratorService:
             {"key": "delta_map50_95", "label": "Delta mAP50-95"},
             {"key": "best_epoch", "label": "Best Epoch"},
             {"key": "epochs_completed", "label": "Epochs"},
+            {"key": "cumulative_epochs", "label": "Cumulative Epochs"},
+            {"key": "training_mode", "label": "Training Mode"},
             {"key": "train_time_sec", "label": "Train Time"},
             {"key": "gpu_mem_peak", "label": "GPU Mem"},
             {"key": "params", "label": "Params"},
@@ -2177,6 +2315,45 @@ class OrchestratorService:
             if not self.repo.trial_display_name_exists(experiment_id, candidate):
                 return candidate
             index += 1
+
+    def _next_continuation_display_name(self, experiment_id: str, parent_display_name: str) -> str:
+        prefix = f"{parent_display_name}_cont"
+        index = 1
+        while True:
+            candidate = f"{prefix}_{index}"
+            if not self.repo.trial_display_name_exists(experiment_id, candidate):
+                return candidate
+            index += 1
+
+    def _trial_completed_epochs(self, trial: TrialRecord) -> int:
+        if trial.summary_path and Path(trial.summary_path).exists():
+            try:
+                value = read_json(trial.summary_path).get("basic_info", {}).get("epochs_completed")
+                if isinstance(value, (int, float)):
+                    return max(0, int(value))
+            except (OSError, ValueError, TypeError):
+                pass
+        results_csv = Path(trial.run_dir) / "results.csv"
+        if results_csv.exists():
+            try:
+                with results_csv.open("r", encoding="utf-8", errors="replace") as handle:
+                    return max(0, sum(1 for line in handle if line.strip()) - 1)
+            except OSError:
+                pass
+        return 0
+
+    def _cumulative_epochs(self, trial: TrialRecord, seen: set[str] | None = None) -> int:
+        visited = set(seen or ())
+        if trial.trial_id in visited:
+            return self._trial_completed_epochs(trial)
+        visited.add(trial.trial_id)
+        total = self._trial_completed_epochs(trial)
+        if trial.parent_trial_id:
+            try:
+                total += self._cumulative_epochs(self.repo.get_trial(trial.parent_trial_id), visited)
+            except KeyError:
+                pass
+        return total
 
     def _validate_trial_display_name(self, display_name: str) -> str:
         normalized = str(display_name or "").strip()
@@ -2361,6 +2538,7 @@ class OrchestratorService:
             "delta_recall": delta.get("recall"),
             "best_epoch": basic.get("best_epoch"),
             "epochs_completed": basic.get("epochs_completed"),
+            "cumulative_epochs": self._cumulative_epochs(trial),
             "train_time_sec": basic.get("train_time_sec"),
             "gpu_mem_peak": resource.get("gpu_mem_peak"),
             "params": params,
@@ -2368,6 +2546,8 @@ class OrchestratorService:
             "summary_path": trial.summary_path,
             "note": trial.note,
             "reason": trial.reason,
+            "parent_trial_id": trial.parent_trial_id,
+            "training_mode": trial.training_mode,
             "remote_training_status": trial.remote_training_status,
             "last_synced_at": trial.last_synced_at,
             "created_at": trial.created_at,
@@ -2387,6 +2567,12 @@ class OrchestratorService:
             
             import csv
             trial_data = []
+            epoch_offset = 0
+            if trial.parent_trial_id:
+                try:
+                    epoch_offset = self._cumulative_epochs(self.repo.get_trial(trial.parent_trial_id))
+                except KeyError:
+                    epoch_offset = 0
             with open(results_csv, "r", encoding="utf-8", newline="") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
@@ -2404,6 +2590,7 @@ class OrchestratorService:
                         if math.isfinite(value):
                             cleaned_row[str(k).strip()] = int(value) if value.is_integer() else value
                     if "epoch" in cleaned_row:
+                        cleaned_row["epoch"] = int(cleaned_row["epoch"]) + epoch_offset
                         fitness_value = calculate_fitness(cleaned_row, config.task_type)
                         if fitness_value is None:
                             cleaned_row.pop("fitness", None)

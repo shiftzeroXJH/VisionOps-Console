@@ -39,6 +39,17 @@ const projectName = (experiment: Experiment) => {
   return project || UNGROUPED_PROJECT
 }
 
+const latestTrainingTime = (experiment: Experiment) => {
+  const timestamp = Date.parse(experiment.latest_trial?.created_at || '')
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+const compareExperiments = (left: Experiment, right: Experiment) => {
+  const timeDifference = latestTrainingTime(right) - latestTrainingTime(left)
+  if (timeDifference !== 0) return timeDifference
+  return left.description.localeCompare(right.description, 'zh-Hans-CN')
+}
+
 const tokenTextForExperiment = (experiment: Experiment) => {
   const statusText = statusTextMap[experiment.status] || experiment.status
   return normalize([
@@ -71,7 +82,17 @@ export function ExperimentList({ experiments, activeId, onSelect, onExperimentUp
       groups.set(project, [...(groups.get(project) || []), experiment])
     })
 
-    return Array.from(groups.entries()).map(([project, items]) => ({ project, experiments: items }))
+    return Array.from(groups.entries())
+      .map(([project, items]) => ({
+        project,
+        experiments: [...items].sort(compareExperiments),
+      }))
+      .sort((left, right) => {
+        const leftLatest = Math.max(0, ...left.experiments.map(latestTrainingTime))
+        const rightLatest = Math.max(0, ...right.experiments.map(latestTrainingTime))
+        if (rightLatest !== leftLatest) return rightLatest - leftLatest
+        return left.project.localeCompare(right.project, 'zh-Hans-CN')
+      })
   }, [experiments, query])
 
   useEffect(() => {

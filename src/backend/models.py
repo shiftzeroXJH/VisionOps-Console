@@ -52,6 +52,8 @@ class TrialRecord:
     last_synced_at: str = ""
     created_at: str = ""
     dataset_analysis: dict[str, Any] = field(default_factory=dict)
+    parent_trial_id: str = ""
+    training_mode: str = "fresh"
 
 
 @dataclass
@@ -69,6 +71,8 @@ class TrainingTask:
     created_at: str = ""
     started_at: str = ""
     finished_at: str = ""
+    parent_trial_id: str = ""
+    training_mode: str = "fresh"
 
 
 @dataclass

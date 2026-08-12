@@ -39,6 +39,9 @@ export type TrainingTask = {
   trial_id?: string;
   created_at: string;
   started_at?: string;
+  parent_trial_id?: string;
+  parent_display_name?: string;
+  training_mode?: 'fresh' | 'continued';
 };
 
 export type TrainingTaskList = {
@@ -343,6 +346,28 @@ export const api = {
 
   async getTrialSummary(trialId: string) {
     const res = await fetch(`/api/trials/${trialId}/summary`);
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async getTrialContinuation(trialId: string) {
+    const res = await fetch(`/api/trials/${trialId}/continuation`);
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async continueTrial(trialId: string, payload: {
+    additional_epochs: number;
+    lr0: number;
+    patience: number;
+    note?: string;
+    enqueue_if_busy?: boolean;
+  }) {
+    const res = await fetch(`/api/trials/${trialId}/continue`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
     if (!res.ok) await safeThrowError(res);
     return res.json();
   },

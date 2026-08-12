@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Download, Edit2, RefreshCw, ScanSearch, X } from 'lucide-react'
+import { Download, Edit2, RefreshCw, RotateCcw, ScanSearch, X } from 'lucide-react'
 import { api } from '../api'
 import { ExportOnnxDialog } from './ExportOnnxDialog'
 import { ImageGallery } from './ImageGallery'
+import { ContinueTrainingDialog } from './ContinueTrainingDialog'
 
 interface Props {
   trialId: string
@@ -49,6 +50,7 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [showExportDialog, setShowExportDialog] = useState(false)
+  const [showContinueDialog, setShowContinueDialog] = useState(false)
   const [editingName, setEditingName] = useState(false)
   const [draftName, setDraftName] = useState('')
   const [savingName, setSavingName] = useState(false)
@@ -92,6 +94,7 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
   const datasetWarnings = Array.isArray(datasetAnalysis.warnings) ? datasetAnalysis.warnings : []
   const isRemote = trial.source === 'remote_sftp'
   const displayName = trial.display_name || trial.trial_id || trialId
+  const continuation = data?.continuation || {}
 
   const saveTrialName = async () => {
     const nextName = draftName.trim()
@@ -136,6 +139,9 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
             <h2 style={{ fontSize: '1.25rem', margin: 0 }}>
               Trial <span className="text-primary">{displayName}</span>
             </h2>
+            {trial.training_mode === 'continued' && (
+              <span className="continuation-badge">续训自 {trial.parent_display_name || trial.parent_trial_id}</span>
+            )}
             {editingName ? (
               <div className="flex items-center gap-2">
                 <input
@@ -165,7 +171,15 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
               </button>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => setShowContinueDialog(true)}
+              disabled={loading || !continuation.can_continue}
+              title={continuation.can_continue ? '从 last.pt 追加训练' : continuation.unavailable_reason || '当前不可续训'}
+            >
+              <RotateCcw size={16} /> 继续训练
+            </button>
             <button className="btn" onClick={openModelEvaluation} disabled={loading || !data}>
               <ScanSearch size={16} /> 模型评估
             </button>
@@ -361,6 +375,16 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
           imgsz={Number(trial.imgsz || data?.params?.imgsz || 0)}
           defaultOutputDir={trial.default_export_dir}
           onClose={() => setShowExportDialog(false)}
+        />
+      )}
+      {showContinueDialog && (
+        <ContinueTrainingDialog
+          trialId={trialId}
+          onClose={() => setShowContinueDialog(false)}
+          onSubmitted={async () => {
+            await load()
+            onUpdated?.()
+          }}
         />
       )}
     </>

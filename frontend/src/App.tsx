@@ -7,7 +7,7 @@ import { Settings, ActivitySquare, Home, ListTodo, Plus } from 'lucide-react'
 import { SettingsDialog } from './components/SettingsDialog'
 import { HomePage } from './components/HomePage'
 import { ModelWorkbench } from './components/ModelWorkbench'
-import { TrainingTaskDialog } from './components/TrainingTaskDialog'
+import { TrainingTaskPopover } from './components/TrainingTaskPopover'
 
 const EMPTY_TRAINING_TASKS: TrainingTaskList = {
   max_parallel_training_tasks: 1,
@@ -64,7 +64,7 @@ function TrainingPlatform() {
     const poll = async () => {
       await refreshTrainingState()
       if (!cancelled) {
-        timer = window.setTimeout(poll, document.hidden ? 10000 : 2000)
+        timer = window.setTimeout(poll, 60000)
       }
     }
     const handleVisibilityChange = () => {
@@ -83,21 +83,22 @@ function TrainingPlatform() {
     <div className="app-shell">
       <div className="sidebar-shell">
         <div className="sidebar-header">
-          <div className="sidebar-brand">
+          <div className="sidebar-brand" title="YOLO 实验平台" aria-label="YOLO 实验平台">
             <ActivitySquare size={20} />
-            <span>YOLO 实验面板</span>
+            <span>YOLO</span>
           </div>
-          <div className="flex gap-1">
+          <div className="sidebar-primary-actions">
             <button className="btn" style={{ padding: '0.25rem 0.5rem' }} onClick={() => { window.location.hash = '#/' }} title="返回首页">
               <Home size={16} />
             </button>
-            <button className="btn" style={{ padding: '0.25rem 0.5rem' }} onClick={() => setShowSettings(true)} title="设置">
+            <button className="btn" style={{ padding: '0.25rem 0.5rem' }} onClick={() => { setShowTrainingTasks(false); setShowSettings(true) }} title="设置">
               <Settings size={16} />
             </button>
             <button
               className="btn training-queue-trigger"
               style={{ padding: '0.25rem 0.5rem' }}
-              onClick={() => setShowTrainingTasks(true)}
+              onClick={() => setShowTrainingTasks((visible) => !visible)}
+              aria-expanded={showTrainingTasks}
               title="模型训练列表"
             >
               <ListTodo size={16} />
@@ -105,11 +106,21 @@ function TrainingPlatform() {
                 <span className="training-queue-badge">{trainingTasks.running_count}/{trainingTasks.queued_count}</span>
               )}
             </button>
-            <button className="btn btn-primary" style={{ padding: '0.25rem 0.5rem' }} onClick={() => setShowCreate(true)} title="创建实验">
+            <button className="btn btn-primary" style={{ padding: '0.25rem 0.5rem' }} onClick={() => { setShowTrainingTasks(false); setShowCreate(true) }} title="创建实验">
               <Plus size={16} />
             </button>
           </div>
         </div>
+        {showTrainingTasks && (
+          <TrainingTaskPopover
+            data={trainingTasks}
+            onChanged={refreshTrainingState}
+            onSelectExperiment={(experimentId) => {
+              setActiveExperimentId(experimentId)
+              setShowTrainingTasks(false)
+            }}
+          />
+        )}
         <div className="sidebar-scroll">
           <ExperimentList
             experiments={experiments}
@@ -150,17 +161,6 @@ function TrainingPlatform() {
       )}
 
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
-      {showTrainingTasks && (
-        <TrainingTaskDialog
-          data={trainingTasks}
-          onClose={() => setShowTrainingTasks(false)}
-          onChanged={refreshTrainingState}
-          onSelectExperiment={(experimentId) => {
-            setActiveExperimentId(experimentId)
-            setShowTrainingTasks(false)
-          }}
-        />
-      )}
     </div>
   )
 }

@@ -97,6 +97,8 @@ class Repository:
                     last_synced_epoch_count INTEGER NOT NULL DEFAULT 0,
                     unchanged_sync_count INTEGER NOT NULL DEFAULT 0,
                     last_synced_at TEXT NOT NULL DEFAULT '',
+                    parent_trial_id TEXT NOT NULL DEFAULT '',
+                    training_mode TEXT NOT NULL DEFAULT 'fresh',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (experiment_id) REFERENCES experiments (experiment_id)
                 );
@@ -143,6 +145,8 @@ class Repository:
                     created_at TEXT NOT NULL,
                     started_at TEXT NOT NULL DEFAULT '',
                     finished_at TEXT NOT NULL DEFAULT '',
+                    parent_trial_id TEXT NOT NULL DEFAULT '',
+                    training_mode TEXT NOT NULL DEFAULT 'fresh',
                     FOREIGN KEY (experiment_id) REFERENCES experiments (experiment_id)
                 );
 
@@ -204,10 +208,24 @@ class Repository:
                 "last_synced_epoch_count": "INTEGER NOT NULL DEFAULT 0",
                 "unchanged_sync_count": "INTEGER NOT NULL DEFAULT 0",
                 "last_synced_at": "TEXT NOT NULL DEFAULT ''",
+                "parent_trial_id": "TEXT NOT NULL DEFAULT ''",
+                "training_mode": "TEXT NOT NULL DEFAULT 'fresh'",
             }
             for column, definition in trial_defaults.items():
                 if column not in trial_columns:
                     conn.execute(f"ALTER TABLE trials ADD COLUMN {column} {definition}")
+
+            training_task_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(training_tasks)").fetchall()
+            }
+            training_task_defaults = {
+                "parent_trial_id": "TEXT NOT NULL DEFAULT ''",
+                "training_mode": "TEXT NOT NULL DEFAULT 'fresh'",
+            }
+            for column, definition in training_task_defaults.items():
+                if column not in training_task_columns:
+                    conn.execute(f"ALTER TABLE training_tasks ADD COLUMN {column} {definition}")
 
             # WAITING_USER_CONFIRM was only used for the removed target-threshold
             # flow. Keep remote uncertainty distinguishable, but complete all
@@ -348,6 +366,8 @@ class Repository:
             created_at=row["created_at"],
             started_at=row["started_at"],
             finished_at=row["finished_at"],
+            parent_trial_id=row["parent_trial_id"],
+            training_mode=row["training_mode"],
         )
 
     def create_training_task(self, task: TrainingTask) -> None:
@@ -356,8 +376,9 @@ class Repository:
                 """
                 INSERT INTO training_tasks (
                     queue_id, experiment_id, params_json, pretrained, note, reason,
-                    status, position, trial_id, error, created_at, started_at, finished_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, position, trial_id, error, created_at, started_at, finished_at,
+                    parent_trial_id, training_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.queue_id,
@@ -373,6 +394,8 @@ class Repository:
                     task.created_at or utc_now_iso(),
                     task.started_at,
                     task.finished_at,
+                    task.parent_trial_id,
+                    task.training_mode,
                 ),
             )
 
@@ -627,8 +650,9 @@ class Repository:
                     summary_path, status, source, note, reason, model, model_source,
                     params_source, remote_server_id, remote_run_dir, sync_status, sync_error,
                     remote_training_status, last_remote_csv_size, last_remote_csv_mtime,
-                    last_synced_epoch_count, unchanged_sync_count, last_synced_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_synced_epoch_count, unchanged_sync_count, last_synced_at,
+                    parent_trial_id, training_mode, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     trial.trial_id,
@@ -657,6 +681,8 @@ class Repository:
                     trial.last_synced_epoch_count,
                     trial.unchanged_sync_count,
                     trial.last_synced_at,
+                    trial.parent_trial_id,
+                    trial.training_mode,
                     trial.created_at or utc_now_iso(),
                 ),
             )
@@ -763,6 +789,8 @@ class Repository:
             unchanged_sync_count=int(row["unchanged_sync_count"]),
             last_synced_at=row["last_synced_at"],
             created_at=row["created_at"],
+            parent_trial_id=row["parent_trial_id"],
+            training_mode=row["training_mode"],
         )
 
     def list_trials(self, experiment_id: str) -> list[TrialRecord]:
@@ -800,6 +828,8 @@ class Repository:
                 unchanged_sync_count=int(row["unchanged_sync_count"]),
                 last_synced_at=row["last_synced_at"],
                 created_at=row["created_at"],
+                parent_trial_id=row["parent_trial_id"],
+                training_mode=row["training_mode"],
             )
             for row in rows
         ]

@@ -734,6 +734,100 @@ def test_run_trial_uses_yolo_python_for_training_worker(tmp_path: Path, monkeypa
     assert captured_kwargs["src_root"].endswith("src")
 
 
+def test_prepare_continuation_uses_last_weight_and_reduces_learning_rate(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset_continue"
+    _write_file(dataset_root / "data.yaml", "train: images/train\nval: images/val\nnames: [part]\n")
+    service = OrchestratorService(db_path=tmp_path / "continue.sqlite")
+    experiment_id = _create_experiment(service, tmp_path, dataset_root)
+    run_dir = tmp_path / "parent_run"
+    _write_results(run_dir)
+    _write_file(run_dir / "weights" / "best.pt", "b" * 2048)
+    _write_file(run_dir / "weights" / "last.pt", "l" * 2048)
+    service.repo.create_trial(
+        TrialRecord(
+            trial_id="trial_parent",
+            display_name="parent",
+            experiment_id=experiment_id,
+            iteration=1,
+            params={"imgsz": 224, "batch": 8, "workers": 0, "epochs": 100, "patience": 10, "lr0": 0.001},
+            status=STATE_COMPLETED,
+            run_dir=str(run_dir),
+        )
+    )
+
+    options = service.get_continuation_options("trial_parent")
+    prepared = service.prepare_continuation_request(
+        "trial_parent",
+        additional_epochs=50,
+        lr0=None,
+        patience=None,
+        note="continue",
+    )
+
+    assert options["can_continue"] is True
+    assert options["defaults"]["lr0"] == 0.0001
+    assert options["cumulative_epochs"] == 2
+    assert Path(prepared["pretrained"]).name == "last.pt"
+    assert prepared["params"]["epochs"] == 50
+    assert prepared["params"]["lr0"] == 0.0001
+    assert prepared["note"] == "continue"
+
+
+def test_continuation_run_creates_linked_trial_without_overwriting_parent(tmp_path: Path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset_continue_run"
+    _write_file(dataset_root / "data.yaml", "train: images/train\nval: images/val\nnames: [part]\n")
+    service = OrchestratorService(db_path=tmp_path / "continue-run.sqlite")
+    experiment_id = _create_experiment(service, tmp_path, dataset_root)
+    parent_run = tmp_path / "parent_run"
+    _write_results(parent_run)
+    _write_file(parent_run / "weights" / "last.pt", "l" * 2048)
+    parent = TrialRecord(
+        trial_id="trial_parent",
+        display_name="parent",
+        experiment_id=experiment_id,
+        iteration=1,
+        params={"imgsz": 224, "batch": 8, "workers": 0, "epochs": 100, "patience": 10, "lr0": 0.001},
+        status=STATE_COMPLETED,
+        run_dir=str(parent_run),
+    )
+    service.repo.create_trial(parent)
+    prepared = service.prepare_continuation_request(
+        parent.trial_id,
+        additional_epochs=25,
+        lr0=None,
+        patience=20,
+        note="second stage",
+    )
+
+    def fake_run_training(**kwargs):
+        run_dir = Path(kwargs["run_dir"])
+        _write_results(run_dir, map50_95=0.6)
+        return {
+            "run_dir": str(run_dir),
+            "stdout_log": str(run_dir / "stdout.log"),
+            "stderr_log": str(run_dir / "stderr.log"),
+        }
+
+    monkeypatch.setattr("backend.service.run_training", fake_run_training)
+    result = service.run_trial(
+        experiment_id,
+        params=prepared["params"],
+        pretrained=prepared["pretrained"],
+        note=prepared["note"],
+        reason=prepared["reason"],
+        parent_trial_id=parent.trial_id,
+        training_mode="continued",
+    )
+
+    child = service.repo.get_trial(result["trial_id"])
+    assert child.parent_trial_id == parent.trial_id
+    assert child.training_mode == "continued"
+    assert child.params["epochs"] == 25
+    assert child.params["lr0"] == 0.0001
+    assert Path(parent.run_dir, "weights", "last.pt").read_text(encoding="utf-8") == "l" * 2048
+    assert Path(child.run_dir) != Path(parent.run_dir)
+
+
 def test_cancel_task_does_not_relabel_completed_waiting_trial(tmp_path: Path) -> None:
     dataset_root = tmp_path / "dataset_cancel_completed"
     _write_file(dataset_root / "data.yaml", "train: images/train\nval: images/val\nnames: [part]\n")

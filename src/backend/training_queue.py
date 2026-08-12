@@ -88,7 +88,52 @@ class TrainingQueue:
             note=note,
             reason=reason,
         )
+        return self._submit_prepared(
+            experiment_id,
+            prepared,
+            enqueue_if_busy=enqueue_if_busy,
+        )
+
+    def submit_continuation(
+        self,
+        trial_id: str,
+        *,
+        additional_epochs: int,
+        lr0: float | None,
+        patience: int | None,
+        note: str | None,
+        enqueue_if_busy: bool,
+    ) -> dict[str, Any]:
+        prepared = self.service.prepare_continuation_request(
+            trial_id,
+            additional_epochs=additional_epochs,
+            lr0=lr0,
+            patience=patience,
+            note=note,
+        )
+        return self._submit_prepared(
+            prepared["experiment_id"],
+            prepared,
+            enqueue_if_busy=enqueue_if_busy,
+            parent_trial_id=trial_id,
+            training_mode="continued",
+        )
+
+    def _submit_prepared(
+        self,
+        experiment_id: str,
+        prepared: dict[str, Any],
+        *,
+        enqueue_if_busy: bool,
+        parent_trial_id: str = "",
+        training_mode: str = "fresh",
+    ) -> dict[str, Any]:
         with self._lock:
+            if parent_trial_id and any(
+                task.parent_trial_id == parent_trial_id
+                for task in self.repo.list_training_tasks((QUEUE_STATUS_RUNNING, QUEUE_STATUS_QUEUED))
+            ):
+                raise ServiceError("this trial already has an active continuation task")
             running_count = len(self.repo.list_training_tasks((QUEUE_STATUS_RUNNING,)))
             if running_count >= self.max_parallel() and not enqueue_if_busy:
                 raise TrainingCapacityError(running_count, self.max_parallel())
@@ -102,6 +147,8 @@ class TrainingQueue:
                 status=QUEUE_STATUS_QUEUED,
                 position=self.repo.next_training_task_position(),
                 created_at=utc_now_iso(),
+                parent_trial_id=parent_trial_id,
+                training_mode=training_mode,
             )
             self.repo.create_training_task(task)
             if not self._experiment_has_running_task(experiment_id):
@@ -188,6 +235,8 @@ class TrainingQueue:
                 pretrained=task.pretrained,
                 note=task.note,
                 reason=task.reason,
+                parent_trial_id=task.parent_trial_id,
+                training_mode=task.training_mode,
                 on_trial_started=on_trial_started,
             )
         except Exception as exc:
@@ -268,6 +317,12 @@ class TrainingQueue:
 
     def _task_payload(self, task: TrainingTask) -> dict[str, Any]:
         config = self.repo.get_experiment(task.experiment_id)
+        parent_display_name = ""
+        if task.parent_trial_id:
+            try:
+                parent_display_name = self.repo.get_trial(task.parent_trial_id).display_name
+            except KeyError:
+                parent_display_name = task.parent_trial_id
         return {
             "queue_id": task.queue_id,
             "experiment_id": task.experiment_id,
@@ -283,4 +338,7 @@ class TrainingQueue:
             "created_at": task.created_at,
             "started_at": task.started_at,
             "finished_at": task.finished_at,
+            "parent_trial_id": task.parent_trial_id,
+            "training_mode": task.training_mode,
+            "parent_display_name": parent_display_name,
         }

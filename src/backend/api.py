@@ -436,6 +436,40 @@ def get_api_summary(trial_id: str, compact: bool = False) -> dict[str, Any]:
     return _invoke_sync("get-api-summary", lambda: service.get_summary(trial_id, compact=compact))
 
 
+@app.get("/api/trials/{trial_id}/continuation")
+def get_trial_continuation(trial_id: str) -> dict[str, Any]:
+    return _invoke_sync("get-trial-continuation", lambda: service.get_continuation_options(trial_id))
+
+
+@app.post("/api/trials/{trial_id}/continue")
+def continue_trial(trial_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    body = dict(payload or {})
+    try:
+        return training_queue.submit_continuation(
+            trial_id,
+            additional_epochs=body.get("additional_epochs"),
+            lr0=body.get("lr0"),
+            patience=body.get("patience"),
+            note=body.get("note"),
+            enqueue_if_busy=bool(body.get("enqueue_if_busy", False)),
+        )
+    except TrainingCapacityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": str(exc),
+                "code": "TRAINING_CAPACITY_REACHED",
+                "running_count": exc.running_count,
+                "max_parallel_training_tasks": exc.max_parallel,
+            },
+        ) from exc
+    except (ServiceError, FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": str(exc), "action": "continue-trial"},
+        ) from exc
+
+
 @app.patch("/api/trials/{trial_id}")
 def rename_trial(trial_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     body = dict(payload or {})

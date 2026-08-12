@@ -247,3 +247,26 @@ def test_increasing_parallel_setting_dispatches_waiting_task(tmp_path) -> None:
     release["exp_a"].set()
     release["exp_b"].set()
     _wait_until(lambda: queue.list_tasks()["running_count"] == 0)
+
+
+def test_training_task_continuation_fields_round_trip(tmp_path) -> None:
+    service = OrchestratorService(db_path=tmp_path / "continuation-fields.sqlite")
+    _create_experiment(service, tmp_path, "exp_continue")
+    service.repo.create_training_task(
+        TrainingTask(
+            queue_id="queue_continue",
+            experiment_id="exp_continue",
+            params={"epochs": 50, "lr0": 0.0001},
+            pretrained=str(tmp_path / "last.pt"),
+            note="",
+            reason="Continue from parent",
+            status=QUEUE_STATUS_QUEUED,
+            position=1,
+            parent_trial_id="trial_parent",
+            training_mode="continued",
+        )
+    )
+
+    task = service.repo.get_training_task("queue_continue")
+    assert task.parent_trial_id == "trial_parent"
+    assert task.training_mode == "continued"

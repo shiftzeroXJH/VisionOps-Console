@@ -17,7 +17,7 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
   const cols = [
     'iteration', 'display_name', 'status',
     'map50_95', 'fitness', 'map50', 'delta_map50_95', 'precision', 'recall',
-    'best_epoch', 'epochs_completed', 'model_display', 'imgsz', 'batch', 'lr0', 'patience',
+    'best_epoch', 'epochs_completed', 'cumulative_epochs', 'training_mode', 'model_display', 'imgsz', 'batch', 'lr0', 'patience',
   ]
 
   const metricMaximums = Object.fromEntries(
@@ -45,6 +45,8 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
       delta_map50_95: `Delta mAP50-95${metricSuffix}`,
       precision: `Precision${metricSuffix}`,
       recall: `Recall${metricSuffix}`,
+      cumulative_epochs: '累计 epochs',
+      training_mode: '训练方式',
     }
     return labels[key] || (key === 'display_name' ? 'Trial' : key.replace(/_/g, ' '))
   }
@@ -84,6 +86,7 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
   const cellValue = (row: any, key: string) => {
     if (key === 'status') return renderStatus(row)
     if (key === 'delta_map50_95') return renderDelta(row.delta_map50_95)
+    if (key === 'training_mode') return row.training_mode === 'continued' ? '续训' : '常规训练'
     if (['imgsz', 'batch', 'lr0', 'patience'].includes(key)) return formatValue(row.params?.[key])
     return formatValue(row[key])
   }
