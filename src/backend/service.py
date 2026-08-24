@@ -9,7 +9,6 @@ import subprocess
 import shutil
 import stat
 import sys
-from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any
 from uuid import uuid4
@@ -405,10 +404,6 @@ class OrchestratorService:
             repo_path = ":memory:"
         else:
             repo_path = str(Path(db_path or "yolo_state.sqlite").resolve())
-            old_repo_path = Path("openclaw_yolo_state.sqlite").resolve()
-            new_repo_path = Path(repo_path)
-            if new_repo_path.name == "yolo_state.sqlite":
-                self._migrate_legacy_db_if_needed(old_repo_path, new_repo_path)
         self.repo = Repository(repo_path)
         self._migrate_experiment_files()
         self._bootstrap_python_setting()
@@ -509,34 +504,6 @@ class OrchestratorService:
         if expected_type == "string" and not isinstance(value, str):
             raise ValueError(f"invalid string value for '{name}'")
         return value
-
-    def _migrate_legacy_db_if_needed(self, old_repo_path: Path, new_repo_path: Path) -> None:
-        if not old_repo_path.exists():
-            return
-        if new_repo_path.exists() and not self._db_has_no_experiments(new_repo_path):
-            return
-        new_repo_path.parent.mkdir(parents=True, exist_ok=True)
-        if new_repo_path.exists():
-            backup_path = new_repo_path.with_name(
-                f"{new_repo_path.name}.empty-backup-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-            )
-            shutil.copy2(new_repo_path, backup_path)
-        shutil.copy2(old_repo_path, new_repo_path)
-
-    def _db_has_no_experiments(self, db_path: Path) -> bool:
-        try:
-            import sqlite3
-
-            with sqlite3.connect(db_path) as connection:
-                row = connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'experiments'"
-                ).fetchone()
-                if row is None:
-                    return True
-                count = connection.execute("SELECT COUNT(*) FROM experiments").fetchone()[0]
-                return int(count) == 0
-        except Exception:
-            return False
 
     def inspect_dataset(self, dataset_root: str) -> dict[str, Any]:
         return {"yaml_candidates": inspect_dataset(dataset_root)}

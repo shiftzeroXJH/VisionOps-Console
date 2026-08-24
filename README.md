@@ -153,7 +153,7 @@ yolo-platform
 | `YOLO_PYTHON` | 训练、验证、导出 worker 使用的 Python | 当前 Python；建议显式设置为 YOLO 环境 Python |
 | `YOLO_FRONTEND_DIST` | 打包验证时的前端构建产物目录 | 当前目录下的 `frontend/dist` |
 
-旧的 `openclaw_yolo_state.sqlite` 如果存在，且新的 `yolo_state.sqlite` 不存在，首次启动会自动复制为新数据库。
+ONNX 默认导出到项目工作目录下的 `exports/`。通过仓库中的启动脚本运行时，该目录位于仓库根目录；也可以在项目设置中改为其他绝对或相对路径。
 
 全局设置中的“最大并行模型训练任务”默认是 `1`，可设置为 `1–64`。该限制只统计平台启动的本地调参训练；等待队列保存在 SQLite 中，后端重启后会继续调度。
 

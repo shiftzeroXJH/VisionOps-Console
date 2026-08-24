@@ -584,24 +584,6 @@ def test_clear_validation_preview_cache_deletes_only_preview_dirs(tmp_path: Path
     assert keep_file.exists()
 
 
-def test_default_db_migrates_old_openclaw_filename(tmp_path: Path, monkeypatch) -> None:
-    old_db = tmp_path / "openclaw_yolo_state.sqlite"
-    old_db.write_bytes(b"legacy db")
-    monkeypatch.chdir(tmp_path)
-
-    class FakeRepository:
-        def __init__(self, db_path: str) -> None:
-            self.db_path = db_path
-
-    monkeypatch.setattr("backend.service.Repository", FakeRepository)
-
-    service = OrchestratorService()
-
-    new_db = tmp_path / "yolo_state.sqlite"
-    assert new_db.read_bytes() == b"legacy db"
-    assert service.repo.db_path == str(new_db.resolve())
-
-
 def test_repository_rebuilds_legacy_experiment_schema(tmp_path: Path) -> None:
     db_path = tmp_path / "legacy.sqlite"
     with sqlite3.connect(db_path) as conn:
