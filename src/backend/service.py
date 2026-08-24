@@ -93,7 +93,7 @@ MODEL_FILENAME_ALIASES = {
 }
 DEFAULT_YOLO_PYTHON = r"D:\apps\miniforge\envs\yolo_env\python.exe"
 YOLO_PYTHON_SETTING_KEY = "yolo_python"
-DEFAULT_EXPORT_DIR = r"C:\Users\Administrator\Downloads"
+DEFAULT_EXPORT_DIR = "exports"
 PROJECT_EXPORT_DIR_SETTING_PREFIX = "project_default_export_dir:"
 VALIDATION_PREVIEW_DIRNAME = ".validation_previews"
 VALIDATION_CURRENT_DIRNAME = "current"

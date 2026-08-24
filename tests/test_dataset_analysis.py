@@ -278,8 +278,8 @@ def test_create_experiment_uses_explicit_project(tmp_path: Path) -> None:
     service = OrchestratorService(db_path=":memory:")
 
     created = service.create_experiment(
-        description="莫仕低倍整体检测",
-        project="莫仕",
+        description="示例任务整体检测",
+        project="示例项目",
         task_type="detection",
         dataset_root=str(dataset_root),
         dataset_yaml=None,
@@ -291,13 +291,14 @@ def test_create_experiment_uses_explicit_project(tmp_path: Path) -> None:
     detail = service.get_experiment_detail(created["experiment_id"])
     listed = service.list_experiments()["experiments"][0]
 
-    assert created["project"] == "莫仕"
+    assert created["project"] == "示例项目"
     assert created["status"] == "NOT_STARTED"
     assert created["internal_status"] == "READY"
-    assert detail["experiment"]["project"] == "莫仕"
+    assert detail["experiment"]["project"] == "示例项目"
     assert detail["experiment"]["status"] == "NOT_STARTED"
     assert "goal" not in detail["experiment"]
-    assert listed["project"] == "莫仕"
+    assert listed["project"] == "示例项目"
+    assert service.get_project_settings("示例项目")["default_export_dir"] == "exports"
 
 
 def test_create_experiment_defaults_project_from_description(tmp_path: Path) -> None:
@@ -317,7 +318,7 @@ def test_create_experiment_defaults_project_from_description(tmp_path: Path) -> 
     service = OrchestratorService(db_path=":memory:")
 
     created = service.create_experiment(
-        description="金具 224 baseline",
+        description="PX sample 224 baseline",
         task_type="detection",
         dataset_root=str(dataset_root),
         dataset_yaml=None,
@@ -326,8 +327,8 @@ def test_create_experiment_defaults_project_from_description(tmp_path: Path) -> 
         initial_params={"imgsz": 224, "batch": 8, "epochs": 2, "workers": 0},
     )
 
-    assert created["project"] == "金具"
-    assert service.get_experiment_detail(created["experiment_id"])["experiment"]["project"] == "金具"
+    assert created["project"] == "PX"
+    assert service.get_experiment_detail(created["experiment_id"])["experiment"]["project"] == "PX"
 
 
 def test_update_experiment_project(tmp_path: Path) -> None:

@@ -95,7 +95,7 @@ export function CreateExperimentDialog({ existingProjects, onClose, onCreated }:
         <form className="flex-col gap-4" onSubmit={handleSubmit}>
           <div className="flex-col gap-2">
             <label style={{ fontSize: '0.875rem' }}>实验描述</label>
-            <input required className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="例如：金具 224 baseline" />
+            <input required className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="例如：零件检测 224 baseline" />
           </div>
 
           <div className="flex-col gap-2">

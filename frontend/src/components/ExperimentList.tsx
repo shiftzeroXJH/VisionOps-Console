@@ -234,7 +234,7 @@ function ProjectSettingsDialog({
   onDeleted: () => void
 }) {
   const [name, setName] = useState(project)
-  const [defaultExportDir, setDefaultExportDir] = useState(experiments[0]?.default_export_dir || 'C:\\Users\\Administrator\\Downloads')
+  const [defaultExportDir, setDefaultExportDir] = useState(experiments[0]?.default_export_dir || 'exports')
   const [confirmation, setConfirmation] = useState('')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -248,7 +248,7 @@ function ProjectSettingsDialog({
       .then((settings) => {
         if (cancelled) return
         setName(settings.project || project)
-        setDefaultExportDir(settings.default_export_dir || 'C:\\Users\\Administrator\\Downloads')
+        setDefaultExportDir(settings.default_export_dir || 'exports')
       })
       .catch((err: any) => {
         if (!cancelled) alert(err?.detail?.error || '加载项目设置失败')
@@ -322,7 +322,7 @@ function ProjectSettingsDialog({
                 className="input"
                 value={defaultExportDir}
                 onChange={(event) => setDefaultExportDir(event.target.value)}
-                placeholder="C:\\Users\\Administrator\\Downloads"
+                placeholder="exports"
                 disabled={busy}
               />
             </label>

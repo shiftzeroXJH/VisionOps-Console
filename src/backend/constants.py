@@ -42,7 +42,7 @@ SEARCH_SPACE: dict[str, dict[str, Any]] = {
     "batch": {"type": "choice", "values": [2, 4, 8, 16, 32]},
     "workers": {"type": "choice", "values": [0, 1, 2, 4]},
     "epochs": {"type": "int", "min": 1, "max": 1000},
-    "patience": {"type": "int", "min": 0, "max": 300},
+    "patience": {"type": "int", "min": 0, "max": 500},
     "optimizer": {"type": "choice", "values": ["SGD", "Adam", "AdamW", "auto"]},
     "lr0": {"type": "float", "min": 0.00001, "max": 0.1},
     "lrf": {"type": "float", "min": 0.001, "max": 1.0},

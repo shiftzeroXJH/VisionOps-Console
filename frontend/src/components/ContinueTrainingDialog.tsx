@@ -121,7 +121,7 @@ export function ContinueTrainingDialog({ trialId, onClose, onSubmitted }: Props)
           </label>
           <label className="param-label">
             <span>早停 patience</span>
-            <input className="input" type="number" min={0} max={300} step={1} value={patience} onChange={(event) => setPatience(Number(event.target.value))} />
+            <input className="input" type="number" min={0} max={500} step={1} value={patience} onChange={(event) => setPatience(Number(event.target.value))} />
           </label>
           <label className="param-label continue-training-note">
             <span>备注</span>

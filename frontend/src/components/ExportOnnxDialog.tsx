@@ -9,7 +9,7 @@ interface Props {
   onClose: () => void
 }
 
-const DEFAULT_OUTPUT_DIR = 'C:\\Users\\Administrator\\Downloads'
+const DEFAULT_OUTPUT_DIR = 'exports'
 const ILLEGAL_NAME_PATTERN = /[<>:"/\\|?*\u0000-\u001f]/
 
 export function ExportOnnxDialog({ trialId, modelStem, imgsz, defaultOutputDir, onClose }: Props) {
