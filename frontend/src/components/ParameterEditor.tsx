@@ -94,6 +94,11 @@ const DEFAULT_EXPANDED: Record<string, boolean> = {
   appearance: false,
 }
 
+const newRowId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
 const displayExtraValue = (value: any) => typeof value === 'string' ? value : JSON.stringify(value)
 
 const parseExtraValue = (value: string, schemaType?: string): { value?: any; error?: string } => {
@@ -140,7 +145,7 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
     const extras: ExtraParam[] = []
     Object.entries(latest).forEach(([key, value]) => {
       if (fixedSchema[key]) fixed[key] = value
-      else extras.push({ id: `${key}-${crypto.randomUUID()}`, key, value: displayExtraValue(value) })
+      else extras.push({ id: `${key}-${newRowId()}`, key, value: displayExtraValue(value) })
     })
     setSchemaData(data)
     setParams(fixed)
@@ -297,7 +302,7 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
       const extras: ExtraParam[] = []
       Object.entries(result.normalized_params || {}).forEach(([key, value]) => {
         if (fixedSchema[key]) fixed[key] = value
-        else extras.push({ id: `${key}-${crypto.randomUUID()}`, key, value: displayExtraValue(value) })
+        else extras.push({ id: `${key}-${newRowId()}`, key, value: displayExtraValue(value) })
       })
       setParams(fixed)
       setExtraParams(extras)
@@ -441,7 +446,7 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
         <section className="param-group-card" style={{ marginTop: '0.75rem' }}>
           <div className="param-group-toggle" style={{ cursor: 'default' }}>
             <div><div className="param-group-title">额外 YOLO 参数</div><div className="param-group-description">从提示中选择参数名，系统会自动识别数据类型；仅应用于本次 Trial。</div></div>
-            <button type="button" className="btn" title="添加额外参数" onClick={() => setExtraParams((current) => [...current, { id: crypto.randomUUID(), key: '', value: '' }])}><Plus size={16} /></button>
+            <button type="button" className="btn" title="添加额外参数" onClick={() => setExtraParams((current) => [...current, { id: newRowId(), key: '', value: '' }])}><Plus size={16} /></button>
           </div>
           <datalist id="extra-yolo-parameters">{Object.keys(extraSchema).map((key) => <option key={key} value={key} />)}</datalist>
           {extraParams.map((row) => {
