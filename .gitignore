@@ -5,6 +5,7 @@
 *.sqlite-journal
 *.sqlite.empty-backup-*
 runs/
+exports/
 datasets/
 *.pt
 *.onnx
