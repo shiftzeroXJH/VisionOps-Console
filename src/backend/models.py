@@ -18,6 +18,7 @@ class ExperimentConfig:
     initial_params: dict[str, Any]
     search_space: dict[str, list[Any]]
     stop_conditions: dict[str, Any]
+    remote_configs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -76,6 +77,17 @@ class TrainingTask:
 
 
 @dataclass
+class HyperparameterTemplate:
+    template_id: str
+    name: str
+    params: dict[str, Any]
+    source_trial_id: str
+    source_task_type: str
+    created_at: str = ""
+    updated_at: str = ""
+
+
+@dataclass
 class RemoteServer:
     remote_server_id: str
     name: str
@@ -86,6 +98,8 @@ class RemoteServer:
     private_key_path: str = ""
     password_ref: str = ""
     default_runs_root: str = ""
+    remote_python: str = ""
+    password: str = ""
 
 
 @dataclass

@@ -52,6 +52,16 @@ export type TrainingTaskList = {
   queued: TrainingTask[];
 };
 
+export type HyperparameterTemplate = {
+  template_id: string;
+  name: string;
+  params: Record<string, unknown>;
+  source_trial_id: string;
+  source_task_type: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type WorkbenchModel = {
   trial_id: string;
   trial_name: string;
@@ -114,6 +124,28 @@ async function safeThrowError(res: Response): Promise<never> {
 }
 
 export const api = {
+  async getHyperparameterTemplates(): Promise<{ templates: HyperparameterTemplate[] }> {
+    const res = await fetch('/api/hyperparameter-templates');
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async saveTrialHyperparameterTemplate(trialId: string, payload: { name: string; overwrite?: boolean }) {
+    const res = await fetch(`/api/trials/${trialId}/hyperparameter-templates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async deleteHyperparameterTemplate(templateId: string) {
+    const res = await fetch(`/api/hyperparameter-templates/${templateId}`, { method: 'DELETE' });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
   async getExperiments(): Promise<{ experiments: Experiment[] }> {
     const res = await fetch('/api/experiments');
     if (!res.ok) await safeThrowError(res);
@@ -170,10 +202,26 @@ export const api = {
     return res.json();
   },
 
+  async runRemoteTrial(experimentId: string, payload: any) {
+    const res = await fetch(`/api/experiments/${experimentId}/trials/remote-run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
   async testRemoteServer(remoteServerId: string) {
     const res = await fetch(`/api/remote-servers/${remoteServerId}/test`, {
       method: 'POST'
     });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async updateRemoteServer(remoteServerId: string, payload: any) {
+    const res = await fetch(`/api/remote-servers/${remoteServerId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     if (!res.ok) await safeThrowError(res);
     return res.json();
   },
@@ -184,7 +232,7 @@ export const api = {
     return res.json();
   },
 
-  async updateExperiment(experimentId: string, payload: { description?: string; project?: string }) {
+  async updateExperiment(experimentId: string, payload: { description?: string; project?: string; dataset_root?: string; dataset_yaml?: string; pretrained_model?: string; remote_configs?: Record<string, unknown> }) {
     const res = await fetch(`/api/experiments/${experimentId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

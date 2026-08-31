@@ -11,6 +11,7 @@ import { ParameterEditor } from './ParameterEditor'
 import { RemoteTrialDialog } from './RemoteTrialDialog'
 import { TrialComparisonTable } from './TrialComparisonTable'
 import { TrialSummaryDrawer } from './TrialSummaryDrawer'
+import { TaskSettingsDialog } from './TaskSettingsDialog'
 
 interface Props {
   experimentId: string
@@ -82,6 +83,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
   const [showCurves, setShowCurves] = useState(false)
   const [showLocalDialog, setShowLocalDialog] = useState(false)
   const [showRemoteDialog, setShowRemoteDialog] = useState(false)
+  const [showTaskSettings, setShowTaskSettings] = useState(false)
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const [renaming, setRenaming] = useState(false)
@@ -151,6 +153,15 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
     loadData()
   }, [experimentId, loadData])
 
+  useEffect(() => {
+    const remoteTrials = (detail?.trials || []).filter((trial: any) => trial.remote_server_id && ['TRAINING', 'RETRAINING'].includes(trial.internal_status))
+    if (remoteTrials.length === 0) return undefined
+    const timer = window.setInterval(() => {
+      Promise.all(remoteTrials.map((trial: any) => api.syncRemoteTrial(trial.trial_id).catch(() => null))).then(() => loadData())
+    }, 30000)
+    return () => window.clearInterval(timer)
+  }, [detail?.trials, loadData])
+
   const handleDeleteTrial = async (trialId: string, keepFiles: boolean) => {
     try {
       await api.deleteTrial(trialId, keepFiles, false)
@@ -175,11 +186,6 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
     } catch (err: any) {
       alert(err?.detail?.error || '停止失败')
     }
-  }
-
-  const startRename = () => {
-    setRenameValue(detail.experiment.description)
-    setIsRenaming(true)
   }
 
   const handleRename = async () => {
@@ -333,8 +339,8 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
               ) : (
                 <div className="flex items-center gap-2" style={{ marginBottom: '0.25rem', flexWrap: 'wrap' }}>
                   <h1 style={{ fontSize: '1.25rem' }}>{experiment.description}</h1>
-                  <button className="btn" style={{ padding: '0.25rem 0.45rem' }} onClick={startRename} title="重命名">
-                    <Edit2 size={14} /> 重命名
+                  <button className="btn" style={{ padding: '0.25rem 0.45rem' }} onClick={() => setShowTaskSettings(true)} title="任务设置">
+                    <Edit2 size={14} /> 任务设置
                   </button>
                 </div>
               )}
@@ -345,8 +351,8 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
               </div>
             </div>
             <div className="workspace-summary-actions">
-              <button className="btn btn-primary workspace-action-btn" onClick={() => setShowParameterDrawer(true)} title="本地训练调参">
-                <Settings2 size={16} /> 本地调参
+              <button className="btn btn-primary workspace-action-btn" onClick={() => setShowParameterDrawer(true)} title="训练参数设置">
+                <Settings2 size={16} /> 参数设置
               </button>
               {canCancel && (
                 <button className="btn workspace-action-btn" onClick={() => setIsCancelling(true)} title="停止任务">
@@ -428,6 +434,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
       {showRemoteDialog && (
         <RemoteTrialDialog experimentId={experimentId} onClose={() => setShowRemoteDialog(false)} onImported={loadData} />
       )}
+      {showTaskSettings && <TaskSettingsDialog experimentId={experimentId} onClose={() => setShowTaskSettings(false)} onSaved={async () => { await loadData(); onExperimentUpdated?.() }} />}
 
       {trialToDelete && (
         <DeleteDialog

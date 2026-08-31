@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, Plus, Settings2, Trash2 } from 'lucide-react'
-import { api } from '../api'
+import { ChevronDown, ChevronUp, Library, Plus, Settings2, Trash2 } from 'lucide-react'
+import { api, type HyperparameterTemplate } from '../api'
+import { RemoteTrainingDialog } from './RemoteTrainingDialog'
 
 interface Props {
   experimentId: string
@@ -24,6 +25,7 @@ type ExtraParam = {
 type ApiError = {
   detail?: {
     code?: string
+    error?: string
     running_count?: number
     max_parallel_training_tasks?: number
   }
@@ -122,6 +124,10 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
   const [validating, setValidating] = useState(false)
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>(DEFAULT_EXPANDED)
+  const [templates, setTemplates] = useState<HyperparameterTemplate[]>([])
+  const [selectedTemplateId, setSelectedTemplateId] = useState('')
+  const [templateBusy, setTemplateBusy] = useState(false)
+  const [remotePayload, setRemotePayload] = useState<{ params: Record<string, unknown>; pretrained: string; note: string } | null>(null)
 
   const experimentIdRef = useRef(experimentId)
   experimentIdRef.current = experimentId
@@ -142,6 +148,15 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
     setModel(data.default_model || '')
     setExpanded(DEFAULT_EXPANDED)
     setValidationErrors({})
+    setSelectedTemplateId('')
+    try {
+      const templateData = await api.getHyperparameterTemplates()
+      setTemplates(templateData.templates || [])
+    } catch (err: unknown) {
+      const detail = (err as ApiError)?.detail
+      setTemplates([])
+      setValidationErrors({ general: detail?.error || '加载超参数模板失败' })
+    }
   }, [])
 
   useEffect(() => {
@@ -242,6 +257,13 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
     }
   }
 
+  const handleRemote = async () => {
+    const isValid = await handleValidate()
+    const candidate = buildCandidateParams()
+    if (!isValid || !candidate.params) return
+    setRemotePayload({ params: candidate.params, pretrained: model, note })
+  }
+
   const updateParam = (key: string, value: any) => {
     setParams((current) => ({ ...current, [key]: value }))
   }
@@ -252,6 +274,56 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
 
   const toggleGroup = (groupId: string) => {
     setExpanded((current) => ({ ...current, [groupId]: !current[groupId] }))
+  }
+
+  const applyTemplate = async (templateId: string) => {
+    setSelectedTemplateId(templateId)
+    if (!templateId) return
+    const template = templates.find((item) => item.template_id === templateId)
+    if (!template) return
+    setTemplateBusy(true)
+    setValidationErrors({})
+    try {
+      const result = await api.validateParams(experimentId, template.params)
+      if (!result.valid) {
+        setValidationErrors({
+          ...(result.errors || {}),
+          general: `模板“${template.name}”与当前训练环境不兼容，请检查标记的参数。`,
+        })
+        return
+      }
+      const fixedSchema = schemaData?.editable_schema || {}
+      const fixed: Record<string, any> = {}
+      const extras: ExtraParam[] = []
+      Object.entries(result.normalized_params || {}).forEach(([key, value]) => {
+        if (fixedSchema[key]) fixed[key] = value
+        else extras.push({ id: `${key}-${crypto.randomUUID()}`, key, value: displayExtraValue(value) })
+      })
+      setParams(fixed)
+      setExtraParams(extras)
+    } catch (err: unknown) {
+      const detail = (err as ApiError)?.detail
+      setValidationErrors({ general: detail?.error || '导入超参数模板失败' })
+    } finally {
+      setTemplateBusy(false)
+    }
+  }
+
+  const deleteSelectedTemplate = async () => {
+    const template = templates.find((item) => item.template_id === selectedTemplateId)
+    if (!template || !confirm(`确定删除超参数模板“${template.name}”吗？`)) return
+    setTemplateBusy(true)
+    try {
+      await api.deleteHyperparameterTemplate(template.template_id)
+      const data = await api.getHyperparameterTemplates()
+      setTemplates(data.templates || [])
+      setSelectedTemplateId('')
+    } catch (err: unknown) {
+      const detail = (err as ApiError)?.detail
+      setValidationErrors({ general: detail?.error || '删除超参数模板失败' })
+    } finally {
+      setTemplateBusy(false)
+    }
   }
 
   if (!schemaData) return <div className="card h-full">正在加载参数...</div>
@@ -311,9 +383,36 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
           <h2 className="parameter-title">本地训练参数</h2>
           <p className="parameter-subtitle">按训练规模、优化器和增强策略分组管理，适合 AOI 检测场景。</p>
         </div>
-        <div className="parameter-badge">
-          <Settings2 size={16} />
-          <span>{Object.keys(schema).length + extraParams.length} 项</span>
+        <div className="parameter-header-actions">
+          <div className="parameter-template-picker">
+            <Library size={16} />
+            <select
+              className="input"
+              aria-label="导入超参数模板"
+              value={selectedTemplateId}
+              onChange={(event) => void applyTemplate(event.target.value)}
+              disabled={templateBusy}
+            >
+              <option value="">选择超参数模板</option>
+              {templates.map((template) => (
+                <option key={template.template_id} value={template.template_id}>{template.name}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn parameter-template-delete"
+              title="删除所选模板"
+              aria-label="删除所选超参数模板"
+              onClick={() => void deleteSelectedTemplate()}
+              disabled={!selectedTemplateId || templateBusy}
+            >
+              <Trash2 size={16} />
+            </button>
+          </div>
+          <div className="parameter-badge">
+            <Settings2 size={16} />
+            <span>{Object.keys(schema).length + extraParams.length} 项</span>
+          </div>
         </div>
       </div>
 
@@ -370,10 +469,11 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
           <input className="input" value={note} onChange={(event) => setNote(event.target.value)} />
         </div>
         <div className="flex gap-2">
-          {onClose && <button className="btn flex-1" onClick={onClose} disabled={validating || loading}>关闭</button>}
-          <button className="btn btn-primary flex-1" onClick={handleRun} disabled={loading || validating}>{loading ? '正在启动...' : '开始训练（自动校验）'}</button>
+          <button className="btn flex-1" onClick={() => void handleRemote()} disabled={loading || validating}>远程训练</button>
+          <button className="btn btn-primary flex-1" onClick={handleRun} disabled={loading || validating}>{loading ? '正在启动...' : '开始训练'}</button>
         </div>
       </div>
+      {remotePayload && <RemoteTrainingDialog experimentId={experimentId} params={remotePayload.params} pretrained={remotePayload.pretrained} note={remotePayload.note} onClose={() => setRemotePayload(null)} onStarted={() => { setRemotePayload(null); onRunSuccess(); onClose?.() }} />}
     </div>
   )
 }

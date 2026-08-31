@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.models import ExperimentConfig, RemoteServer, TrainingTask, TrialRecord
+from backend.models import ExperimentConfig, HyperparameterTemplate, RemoteServer, TrainingTask, TrialRecord
 from backend.utils import utc_now_iso
 
 
@@ -67,6 +67,7 @@ class Repository:
                     initial_params TEXT NOT NULL,
                     search_space TEXT NOT NULL,
                     stop_conditions TEXT NOT NULL,
+                    remote_configs TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
 
@@ -113,6 +114,8 @@ class Repository:
                     private_key_path TEXT NOT NULL DEFAULT '',
                     password_ref TEXT NOT NULL DEFAULT '',
                     default_runs_root TEXT NOT NULL DEFAULT '',
+                    remote_python TEXT NOT NULL DEFAULT '',
+                    password TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL
                 );
 
@@ -128,6 +131,16 @@ class Repository:
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS hyperparameter_templates (
+                    template_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    params_json TEXT NOT NULL,
+                    source_trial_id TEXT NOT NULL DEFAULT '',
+                    source_task_type TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
 
@@ -158,6 +171,11 @@ class Repository:
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(experiments)").fetchall()
             }
+            remote_server_columns = {row["name"] for row in conn.execute("PRAGMA table_info(remote_servers)").fetchall()}
+            if "remote_python" not in remote_server_columns:
+                conn.execute("ALTER TABLE remote_servers ADD COLUMN remote_python TEXT NOT NULL DEFAULT ''")
+            if "password" not in remote_server_columns:
+                conn.execute("ALTER TABLE remote_servers ADD COLUMN password TEXT NOT NULL DEFAULT ''")
             if "description" not in columns:
                 conn.execute("ALTER TABLE experiments ADD COLUMN description TEXT NOT NULL DEFAULT ''")
             if "project" not in columns:
@@ -170,6 +188,8 @@ class Repository:
                     row["name"]
                     for row in conn.execute("PRAGMA table_info(experiments)").fetchall()
                 }
+            if "remote_configs" not in columns:
+                conn.execute("ALTER TABLE experiments ADD COLUMN remote_configs TEXT NOT NULL DEFAULT '{}'")
             conn.execute(
                 """
                 UPDATE experiments
@@ -319,6 +339,9 @@ class Repository:
     def next_trial_id(self) -> str:
         return self._next_id("trial", "trials", "trial_id")
 
+    def next_hyperparameter_template_id(self) -> str:
+        return self._next_id("hpt", "hyperparameter_templates", "template_id")
+
     def trial_id_exists(self, trial_id: str) -> bool:
         with self._connect() as conn:
             row = conn.execute(
@@ -349,6 +372,90 @@ class Repository:
                 """,
                 (key, str(value or ""), utc_now_iso()),
             )
+
+    @staticmethod
+    def _hyperparameter_template_from_row(row: sqlite3.Row) -> HyperparameterTemplate:
+        return HyperparameterTemplate(
+            template_id=row["template_id"],
+            name=row["name"],
+            params=json.loads(row["params_json"]),
+            source_trial_id=row["source_trial_id"],
+            source_task_type=row["source_task_type"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def list_hyperparameter_templates(self) -> list[HyperparameterTemplate]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM hyperparameter_templates ORDER BY name COLLATE NOCASE, template_id"
+            ).fetchall()
+        return [self._hyperparameter_template_from_row(row) for row in rows]
+
+    def get_hyperparameter_template_by_name(self, name: str) -> HyperparameterTemplate | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM hyperparameter_templates WHERE name = ? COLLATE NOCASE",
+                (name,),
+            ).fetchone()
+        return self._hyperparameter_template_from_row(row) if row is not None else None
+
+    def create_hyperparameter_template(self, template: HyperparameterTemplate) -> None:
+        timestamp = template.created_at or utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO hyperparameter_templates (
+                    template_id, name, params_json, source_trial_id, source_task_type,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    template.template_id,
+                    template.name,
+                    json.dumps(template.params),
+                    template.source_trial_id,
+                    template.source_task_type,
+                    timestamp,
+                    template.updated_at or timestamp,
+                ),
+            )
+
+    def overwrite_hyperparameter_template(
+        self,
+        template_id: str,
+        *,
+        name: str,
+        params: dict[str, Any],
+        source_trial_id: str,
+        source_task_type: str,
+    ) -> None:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE hyperparameter_templates
+                SET name = ?, params_json = ?, source_trial_id = ?, source_task_type = ?, updated_at = ?
+                WHERE template_id = ?
+                """,
+                (
+                    name,
+                    json.dumps(params),
+                    source_trial_id,
+                    source_task_type,
+                    utc_now_iso(),
+                    template_id,
+                ),
+            )
+        if cursor.rowcount == 0:
+            raise KeyError(f"hyperparameter template not found: {template_id}")
+
+    def delete_hyperparameter_template(self, template_id: str) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM hyperparameter_templates WHERE template_id = ?",
+                (template_id,),
+            )
+        return int(cursor.rowcount or 0)
 
     @staticmethod
     def _training_task_from_row(row: sqlite3.Row) -> TrainingTask:
@@ -509,8 +616,8 @@ class Repository:
                 INSERT INTO experiments (
                     experiment_id, description, project, task_type, dataset_root, dataset_yaml, pretrained_model,
                     save_root, status,
-                    initial_params, search_space, stop_conditions, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    initial_params, search_space, stop_conditions, remote_configs, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     config.experiment_id,
@@ -525,6 +632,7 @@ class Repository:
                     json.dumps(config.initial_params),
                     json.dumps(config.search_space),
                     json.dumps(config.stop_conditions),
+                    json.dumps(config.remote_configs),
                     utc_now_iso(),
                 ),
             )
@@ -550,6 +658,7 @@ class Repository:
             initial_params=json.loads(row["initial_params"]),
             search_space=json.loads(row["search_space"]),
             stop_conditions=json.loads(row["stop_conditions"]),
+            remote_configs=json.loads(row["remote_configs"] or "{}"),
         )
 
     def update_experiment_status(self, experiment_id: str, status: str) -> None:
@@ -559,7 +668,7 @@ class Repository:
                 (status, experiment_id),
             )
 
-    def update_experiment(self, experiment_id: str, *, description: str | None = None, project: str | None = None) -> None:
+    def update_experiment(self, experiment_id: str, *, description: str | None = None, project: str | None = None, dataset_root: str | None = None, dataset_yaml: str | None = None, pretrained_model: str | None = None, remote_configs: dict[str, Any] | None = None) -> None:
         assignments: list[str] = []
         values: list[Any] = []
         if description is not None:
@@ -568,6 +677,13 @@ class Repository:
         if project is not None:
             assignments.append("project = ?")
             values.append(project)
+        if remote_configs is not None:
+            assignments.append("remote_configs = ?")
+            values.append(json.dumps(remote_configs))
+        for column, value in (("dataset_root", dataset_root), ("dataset_yaml", dataset_yaml), ("pretrained_model", pretrained_model)):
+            if value is not None:
+                assignments.append(f"{column} = ?")
+                values.append(value)
         if not assignments:
             return
         values.append(experiment_id)
@@ -605,6 +721,7 @@ class Repository:
                 initial_params=json.loads(row["initial_params"]),
                 search_space=json.loads(row["search_space"]),
                 stop_conditions=json.loads(row["stop_conditions"]),
+                remote_configs=json.loads(row["remote_configs"] or "{}"),
             )
             for row in rows
         ]
@@ -637,6 +754,7 @@ class Repository:
                 initial_params=json.loads(row["initial_params"]),
                 search_space=json.loads(row["search_space"]),
                 stop_conditions=json.loads(row["stop_conditions"]),
+                remote_configs=json.loads(row["remote_configs"] or "{}"),
             )
             for row in rows
         ]
@@ -840,8 +958,8 @@ class Repository:
                 """
                 INSERT INTO remote_servers (
                     remote_server_id, name, host, port, username, auth_type,
-                    private_key_path, password_ref, default_runs_root, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    private_key_path, password_ref, default_runs_root, remote_python, password, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     server.remote_server_id,
@@ -853,6 +971,8 @@ class Repository:
                     server.private_key_path,
                     server.password_ref,
                     server.default_runs_root,
+                    server.remote_python,
+                    server.password,
                     utc_now_iso(),
                 ),
             )
@@ -873,6 +993,8 @@ class Repository:
                 private_key_path=row["private_key_path"],
                 password_ref=row["password_ref"],
                 default_runs_root=row["default_runs_root"],
+                remote_python=row["remote_python"],
+                password=row["password"],
             )
             for row in rows
         ]
@@ -895,7 +1017,21 @@ class Repository:
             private_key_path=row["private_key_path"],
             password_ref=row["password_ref"],
             default_runs_root=row["default_runs_root"],
+            remote_python=row["remote_python"],
+            password=row["password"],
         )
+
+    def update_remote_server(self, remote_server_id: str, **fields: Any) -> None:
+        allowed = {"name", "host", "port", "username", "remote_python", "default_runs_root", "password"}
+        assignments = [f"{key} = ?" for key in fields if key in allowed]
+        values = [fields[key] for key in fields if key in allowed]
+        if not assignments:
+            return
+        values.append(remote_server_id)
+        with self._connect() as conn:
+            cursor = conn.execute(f"UPDATE remote_servers SET {', '.join(assignments)} WHERE remote_server_id = ?", values)
+            if cursor.rowcount == 0:
+                raise KeyError(f"remote server not found: {remote_server_id}")
 
     def delete_trials_for_experiment(self, experiment_id: str) -> int:
         with self._connect() as conn:

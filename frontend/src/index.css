@@ -1033,10 +1033,22 @@ tr:hover td {
 }
 
 .settings-dialog {
+  width: min(980px, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
+
+.settings-content-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr); gap: 1rem; align-items: start; }
+.settings-main-column { min-width: 0; display: grid; gap: 1rem; }
+.settings-remote-column { min-width: 0; }
+.settings-server-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.65rem 0; border-bottom: 1px solid var(--panel-border); }
+.settings-server-row > div:first-child { min-width: 0; display: grid; gap: 0.2rem; }
+.settings-server-row strong, .settings-server-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 760px) { .settings-content-grid { grid-template-columns: 1fr; } }
 
 .continue-training-dialog {
   width: 560px;
@@ -1084,6 +1096,63 @@ tr:hover td {
   justify-content: space-between;
   align-items: flex-start;
   gap: 1rem;
+}
+
+.trial-params-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.template-save-notice {
+  color: #047857;
+  font-size: 0.78rem;
+}
+
+.template-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+}
+
+.template-dialog {
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.template-dialog-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.template-dialog-title h2 { font-size: 1.15rem; }
+.template-dialog-actions { border-top: 1px solid var(--panel-border); }
+
+.parameter-header-actions,
+.parameter-template-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.parameter-header-actions { flex-wrap: wrap; justify-content: flex-end; }
+.parameter-template-picker .input { width: 230px; }
+.parameter-template-delete { width: 36px; height: 36px; padding: 0; justify-content: center; }
+
+@media (max-width: 760px) {
+  .parameter-header-actions { width: 100%; justify-content: flex-start; }
+  .parameter-template-picker { min-width: 0; flex: 1; }
+  .parameter-template-picker .input { min-width: 0; width: 100%; }
 }
 
 .settings-header h2 {

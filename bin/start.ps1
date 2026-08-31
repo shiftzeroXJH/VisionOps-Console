@@ -51,44 +51,20 @@ function Get-ConfiguredPython {
     }
 
     if (Test-Path -LiteralPath $DbPath) {
-        $query = @"
-import sqlite3, sys
-db_path = sys.argv[1]
-try:
-    conn = sqlite3.connect(db_path)
-    row = conn.execute("SELECT value FROM settings WHERE key = 'yolo_python'").fetchone()
-    if row and row[0]:
-        print(str(row[0]).strip())
-finally:
-    try:
-        conn.close()
-    except Exception:
-        pass
-"@
         try {
-            $configured = & python -c $query $DbPath 2>$null
+            $pythonCommand = Get-Command python.exe -ErrorAction Stop
+            $reader = Join-Path $ProjectRoot 'bin\read-yolo-python.py'
+            $configured = & $pythonCommand.Source $reader $DbPath 2>$null
             if ($LASTEXITCODE -eq 0 -and $configured) {
-                return $configured.Trim()
+                return ([string]($configured -join '')).Trim()
             }
+            throw 'The global yolo_python setting could not be read'
         } catch {
+            throw "Unable to read global yolo_python setting from $DbPath : $($_.Exception.Message)"
         }
     }
 
-    $candidates = @(
-        "C:\Users\Administrator\miniconda3\envs\yolo_env\python.exe",
-        "C:\Users\Administrator\miniforge3\envs\yolo_env\python.exe",
-        "C:\Users\Administrator\anaconda3\envs\yolo_env\python.exe",
-        "python"
-    )
-    foreach ($candidate in $candidates) {
-        if ($candidate -eq "python") {
-            return $candidate
-        }
-        if (Test-Path -LiteralPath $candidate) {
-            return $candidate
-        }
-    }
-
+    # Before the first global setting is saved, let Python resolve from PATH.
     return "python"
 }
 

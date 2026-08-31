@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-from backend.service import OrchestratorService, ServiceError
+from backend.service import OrchestratorService, ServiceError, TemplateNameConflictError
 from backend.workbench import WorkbenchError
 from backend.jobs import JobStore
 from backend.training_queue import TrainingCapacityError, TrainingQueue
@@ -54,6 +54,19 @@ def health() -> dict[str, str]:
 @app.get("/api/experiments")
 def list_experiments() -> dict[str, Any]:
     return _invoke_sync("list-experiments", service.list_experiments)
+
+
+@app.get("/api/hyperparameter-templates")
+def list_hyperparameter_templates() -> dict[str, Any]:
+    return _invoke_sync("list-hyperparameter-templates", service.list_hyperparameter_templates)
+
+
+@app.delete("/api/hyperparameter-templates/{template_id}")
+def delete_hyperparameter_template(template_id: str) -> dict[str, Any]:
+    return _invoke_sync(
+        "delete-hyperparameter-template",
+        lambda: service.delete_hyperparameter_template(template_id),
+    )
 
 
 @app.get("/api/workbench/models")
@@ -250,6 +263,8 @@ def create_remote_server(payload: dict[str, Any]) -> dict[str, Any]:
             private_key_path=body.get("private_key_path"),
             password_ref=body.get("password_ref"),
             default_runs_root=body.get("default_runs_root"),
+            remote_python=body.get("remote_python"),
+            password=body.get("password"),
         ),
     )
 
@@ -257,6 +272,12 @@ def create_remote_server(payload: dict[str, Any]) -> dict[str, Any]:
 @app.post("/api/remote-servers/{remote_server_id}/test")
 def test_remote_server(remote_server_id: str) -> dict[str, Any]:
     return _invoke_sync("test-remote-server", lambda: service.test_remote_server(remote_server_id))
+
+
+@app.patch("/api/remote-servers/{remote_server_id}")
+def update_remote_server(remote_server_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload or {})
+    return _invoke_sync("update-remote-server", lambda: service.update_remote_server(remote_server_id, **body))
 
 
 @app.post("/api/experiments")
@@ -267,6 +288,7 @@ def create_experiment(payload: dict[str, Any]) -> dict[str, Any]:
         lambda: service.create_experiment(
             description=body.get("description", ""),
             project=body.get("project"),
+            remote_configs=body.get("remote_configs"),
             task_type=body["task_type"],
             dataset_root=body["dataset_root"],
             dataset_yaml=body.get("dataset_yaml"),
@@ -318,6 +340,10 @@ def update_experiment(experiment_id: str, payload: dict[str, Any]) -> dict[str, 
             experiment_id,
             description=body.get("description"),
             project=body.get("project"),
+            dataset_root=body.get("dataset_root"),
+            dataset_yaml=body.get("dataset_yaml"),
+            pretrained_model=body.get("pretrained_model"),
+            remote_configs=body.get("remote_configs"),
         ),
     )
 
@@ -381,11 +407,28 @@ def run_experiment_trial(experiment_id: str, payload: dict[str, Any] | None = No
                 "max_parallel_training_tasks": exc.max_parallel,
             },
         ) from exc
+
+
     except (ServiceError, FileNotFoundError, KeyError, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=400,
             detail={"error": str(exc), "action": "run-experiment-trial"},
         ) from exc
+
+
+@app.post("/api/experiments/{experiment_id}/trials/remote-run")
+def run_remote_experiment_trial(experiment_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    body = dict(payload or {})
+    return _invoke_sync(
+        "run-remote-experiment-trial",
+        lambda: service.launch_remote_trial(
+            experiment_id,
+            remote_server_id=body["remote_server_id"],
+            params=body.get("params"),
+            pretrained=body.get("pretrained") or body.get("model"),
+            note=body.get("note"),
+        ),
+    )
 
 
 @app.post("/api/experiments/{experiment_id}/trials/import")
@@ -434,6 +477,27 @@ def import_remote_trial(experiment_id: str, payload: dict[str, Any]) -> dict[str
 @app.get("/api/trials/{trial_id}/summary")
 def get_api_summary(trial_id: str, compact: bool = False) -> dict[str, Any]:
     return _invoke_sync("get-api-summary", lambda: service.get_summary(trial_id, compact=compact))
+
+
+@app.post("/api/trials/{trial_id}/hyperparameter-templates")
+def save_trial_hyperparameter_template(trial_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload or {})
+    try:
+        return service.save_trial_hyperparameter_template(
+            trial_id,
+            body.get("name", ""),
+            overwrite=bool(body.get("overwrite", False)),
+        )
+    except TemplateNameConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": str(exc), "code": "TEMPLATE_NAME_CONFLICT"},
+        ) from exc
+    except (ServiceError, FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": str(exc), "action": "save-trial-hyperparameter-template"},
+        ) from exc
 
 
 @app.get("/api/trials/{trial_id}/continuation")

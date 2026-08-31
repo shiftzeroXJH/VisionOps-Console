@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Download, Edit2, RefreshCw, RotateCcw, ScanSearch, X } from 'lucide-react'
+import { Download, Edit2, RefreshCw, RotateCcw, Save, ScanSearch, X } from 'lucide-react'
 import { api } from '../api'
 import { ExportOnnxDialog } from './ExportOnnxDialog'
 import { ImageGallery } from './ImageGallery'
 import { ContinueTrainingDialog } from './ContinueTrainingDialog'
+import { SaveHyperparameterTemplateDialog } from './SaveHyperparameterTemplateDialog'
 
 interface Props {
   trialId: string
@@ -54,6 +55,8 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
   const [editingName, setEditingName] = useState(false)
   const [draftName, setDraftName] = useState('')
   const [savingName, setSavingName] = useState(false)
+  const [showSaveTemplateDialog, setShowSaveTemplateDialog] = useState(false)
+  const [templateNotice, setTemplateNotice] = useState('')
 
   const trialIdRef = useRef(trialId)
   trialIdRef.current = trialId
@@ -353,7 +356,15 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                 </section>
 
                 <section className="flex-col gap-2">
-                  <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>参数</h3>
+                  <div className="trial-params-heading">
+                    <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>参数</h3>
+                    <div className="flex items-center gap-2">
+                      {templateNotice && <span className="template-save-notice">{templateNotice}</span>}
+                      <button className="btn" onClick={() => setShowSaveTemplateDialog(true)}>
+                        <Save size={16} /> 保存为模板
+                      </button>
+                    </div>
+                  </div>
                   <div className="trial-params-grid">
                     {sortParamEntries(data.params || {}).map(([key, value]) => (
                       <div className="trial-param-item" key={key}>
@@ -384,6 +395,17 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
           onSubmitted={async () => {
             await load()
             onUpdated?.()
+          }}
+        />
+      )}
+      {showSaveTemplateDialog && (
+        <SaveHyperparameterTemplateDialog
+          trialId={trialId}
+          defaultName={displayName}
+          onClose={() => setShowSaveTemplateDialog(false)}
+          onSaved={(name, overwritten) => {
+            setShowSaveTemplateDialog(false)
+            setTemplateNotice(overwritten ? `已覆盖模板：${name}` : `已保存模板：${name}`)
           }}
         />
       )}
