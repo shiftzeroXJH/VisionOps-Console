@@ -36,25 +36,26 @@ function TaskRow({ task, queued, index, count, busy, run, onSelectExperiment }: 
   const phase = task.phase || 'running'
   return <div className="training-task-row">
     <button className="training-task-main" disabled={!task.experiment_id} onClick={() => onSelectExperiment(task.experiment_id)}>
-      <span className={`training-task-state ${queued ? 'queued' : phase}`}>
-        {queued ? `#${index + 1} 排队中` : phase === 'preparing' ? '准备中' : phase === 'unknown' ? '状态未知' : '训练中'}
+      <span className={`status-pill ${queued ? 'status-pill-queued' : phase === 'running' ? 'status-pill-running' : 'status-pill-neutral'}`} style={{ alignSelf: 'center' }}>
+        <span className="status-dot" />
+        {queued ? `#${index + 1} 排队` : phase === 'preparing' ? '准备中' : phase === 'unknown' ? '未知' : '训练中'}
       </span>
-      <strong>{task.experiment_name || task.experiment_id || task.queue_id}</strong>
-      <span className="text-muted">{task.project} · {task.training_mode === 'continued' ? `续训自 ${task.parent_display_name || task.parent_trial_id}` : modelName(task.model)}</span>
-      <span className="text-muted">{queued ? `提交：${formatDateTime(task.created_at)}` : `开始：${formatDateTime(task.started_at)}`}</span>
-      {(task.last_synced_epoch_count ?? 0) > 0 && <span className="training-task-detail">已同步 {task.last_synced_epoch_count} Epoch</span>}
+      <strong style={{ fontSize: '0.84rem' }}>{task.experiment_name || task.experiment_id || task.queue_id}</strong>
+      <span className="text-muted" style={{ fontSize: '0.72rem' }}>{task.project} · {task.training_mode === 'continued' ? `续训自 ${task.parent_display_name || task.parent_trial_id}` : modelName(task.model)}</span>
+      <span className="text-muted font-mono" style={{ fontSize: '0.72rem' }}>{queued ? `提交：${formatDateTime(task.created_at)}` : `开始：${formatDateTime(task.started_at)}`}</span>
+      {(task.last_synced_epoch_count ?? 0) > 0 && <span className="training-task-detail font-mono" style={{ color: 'var(--primary)' }}>已同步 {task.last_synced_epoch_count} Epoch</span>}
       {task.waiting_reason && <span className="training-task-detail">{task.waiting_reason}</span>}
       {task.error && <span className="training-task-detail text-danger">{task.error}</span>}
     </button>
     <div className="training-task-actions">
       {queued && <>
-        <button className="icon-btn" disabled={busy || index === 0} onClick={() => void run(() => api.reorderTrainingTask(task.queue_id, index))} title="上移" aria-label="上移"><ArrowUp size={16} /></button>
-        <button className="icon-btn" disabled={busy || index === count - 1} onClick={() => void run(() => api.reorderTrainingTask(task.queue_id, index + 2))} title="下移" aria-label="下移"><ArrowDown size={16} /></button>
-        <button className="icon-btn danger" disabled={busy} onClick={() => {
+        <button className="btn" style={{ padding: '0.2rem 0.35rem', height: 26 }} disabled={busy || index === 0} onClick={() => void run(() => api.reorderTrainingTask(task.queue_id, index))} title="上移" aria-label="上移"><ArrowUp size={13} /></button>
+        <button className="btn" style={{ padding: '0.2rem 0.35rem', height: 26 }} disabled={busy || index === count - 1} onClick={() => void run(() => api.reorderTrainingTask(task.queue_id, index + 2))} title="下移" aria-label="下移"><ArrowDown size={13} /></button>
+        <button className="btn btn-danger" style={{ padding: '0.2rem 0.35rem', height: 26 }} disabled={busy} onClick={() => {
           if (confirm(`确定取消“${task.experiment_name}”的排队训练吗？`)) void run(() => api.cancelTrainingTask(task.queue_id))
-        }} title="取消排队" aria-label="取消排队"><Trash2 size={16} /></button>
+        }} title="取消排队" aria-label="取消排队"><Trash2 size={13} /></button>
       </>}
-      {!queued && phase === 'unknown' && <button className="btn" disabled={busy} onClick={() => void run(() => api.recheckTrainingTask(task.queue_id))}>重新检查</button>}
+      {!queued && phase === 'unknown' && <button className="btn" style={{ padding: '0.2rem 0.5rem', height: 26, fontSize: '0.75rem' }} disabled={busy} onClick={() => void run(() => api.recheckTrainingTask(task.queue_id))}>重新检查</button>}
     </div>
   </div>
 }

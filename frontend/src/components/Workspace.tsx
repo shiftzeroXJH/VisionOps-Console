@@ -310,11 +310,11 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
         </div>
       </div>
       <ResponsiveContainer width="100%" height="88%">
-        <LineChart data={chartWindowData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.2)" vertical={false} />
-          <XAxis dataKey="epoch" tick={{fontSize: 11, fill: 'var(--text-muted)'}} axisLine={false} tickLine={false} />
-          <YAxis domain={yAxisDomain} tickFormatter={formatAxisTick} tick={{fontSize: 11, fill: 'var(--text-muted)'}} axisLine={false} tickLine={false} width={52} allowDataOverflow={summaryYAxisMode === 'plateau'} />
-          <Tooltip contentStyle={{ borderRadius: 8, border: 'none', boxShadow: 'var(--shadow-md)', background: 'rgba(255,255,255,0.95)' }} />
+        <LineChart data={chartWindowData} margin={{ top: 5, right: 15, bottom: 5, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+          <XAxis dataKey="epoch" tick={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }} axisLine={{ stroke: 'var(--border-default)' }} tickLine={false} />
+          <YAxis domain={yAxisDomain} tickFormatter={formatAxisTick} tick={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }} axisLine={false} tickLine={false} width={52} allowDataOverflow={summaryYAxisMode === 'plateau'} />
+          <Tooltip contentStyle={{ borderRadius: 6, border: '1px solid var(--border-default)', boxShadow: 'var(--shadow-md)', background: '#ffffff', fontSize: 12 }} />
           <Legend content={renderSummaryLegend} />
           {visibleSummaryTrialIds.map((trialId) => {
             const index = trialIds.indexOf(trialId)
@@ -356,46 +356,55 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
                 </div>
               ) : (
                 <div className="flex items-center gap-2" style={{ marginBottom: '0.25rem', flexWrap: 'wrap' }}>
-                  <h1 style={{ fontSize: '1.25rem' }}>{experiment.description}</h1>
-                  <button className="btn" style={{ padding: '0.25rem 0.45rem' }} onClick={() => setShowTaskSettings(true)} title="任务设置">
-                    <Edit2 size={14} /> 任务设置
+                  <h1 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>{experiment.description}</h1>
+                  <button className="btn" style={{ padding: '0.25rem 0.55rem', height: 28, fontSize: '0.75rem' }} onClick={() => setShowTaskSettings(true)} title="任务设置">
+                    <Edit2 size={13} /> 任务设置
                   </button>
                 </div>
               )}
-              <div className="flex gap-4 text-muted" style={{ fontSize: '0.875rem', flexWrap: 'wrap' }}>
-                <span>数据集：{experiment.dataset_root}</span>
-                <span>默认模型：{detail.default_model || experiment.pretrained_model}</span>
-                <span>最新训练：{formatDateTime(detail.latest_trial_created_at)}</span>
+              <div className="workspace-meta-bar">
+                <span className="meta-chip">
+                  <span className="meta-chip-label">数据集</span>
+                  <span className="meta-chip-value font-mono" title={experiment.dataset_root}>{experiment.dataset_root}</span>
+                </span>
+                <span className="meta-chip">
+                  <span className="meta-chip-label">默认模型</span>
+                  <span className="meta-chip-value font-mono">{detail.default_model || experiment.pretrained_model}</span>
+                </span>
+                <span className="meta-chip">
+                  <span className="meta-chip-label">最新训练</span>
+                  <span className="meta-chip-value font-mono">{formatDateTime(detail.latest_trial_created_at)}</span>
+                </span>
               </div>
             </div>
             <div className="workspace-summary-actions">
               <button className="btn btn-primary workspace-action-btn" onClick={() => setShowParameterDrawer(true)} title="训练参数设置">
-                <Settings2 size={16} /> 参数设置
+                <Settings2 size={15} /> 参数设置
               </button>
               {canCancel && (
                 <button className="btn workspace-action-btn" onClick={() => setIsCancelling(true)} title="停止任务">
-                  <Square size={16} /> 停止任务
+                  <Square size={15} /> 停止任务
                 </button>
               )}
               <button className="btn btn-danger workspace-action-btn" onClick={() => setIsDeleting(true)} title="删除任务">
-                <Trash2 size={16} /> 删除任务
+                <Trash2 size={15} /> 删除任务
               </button>
             </div>
           </div>
         </div>
 
         <div className="card comparison-card">
-          <div className="p-4" style={{ borderBottom: '1px solid var(--panel-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h2 style={{ fontSize: '1rem' }}>历次试验对比汇总</h2>
+          <div className="p-3 px-4" style={{ borderBottom: '1px solid var(--border-default)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h2 style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)' }}>历次试验对比汇总</h2>
             <div className="flex gap-2" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <button className="btn" onClick={() => setShowLocalDialog(true)}>
-                <FolderInput size={16} /> 导入本地训练
+                <FolderInput size={14} /> 导入本地训练
               </button>
               <button className="btn" onClick={() => setShowRemoteDialog(true)}>
-                <RadioTower size={16} /> 导入远程训练
+                <RadioTower size={14} /> 导入远程训练
               </button>
               <button className="btn" onClick={() => setShowCurves(true)}>
-                <Activity size={16} /> 曲线对比
+                <Activity size={14} /> 曲线对比
               </button>
               <button className="btn" onClick={loadData}>刷新</button>
             </div>

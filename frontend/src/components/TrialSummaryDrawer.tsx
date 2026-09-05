@@ -129,18 +129,18 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
 
   return (
     <>
-      <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.3)', zIndex: 40 }} onClick={onClose} />
+      <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.45)', zIndex: 40 }} onClick={onClose} />
       <div
         style={{
           position: 'fixed', right: 0, top: 0, bottom: 0, width: 1300, maxWidth: '95vw',
-          zIndex: 50, backgroundColor: 'var(--panel-bg)', display: 'flex', flexDirection: 'column',
-          boxShadow: '-4px 0 24px rgba(0,0,0,0.6)', borderLeft: '1px solid var(--panel-border)',
+          zIndex: 50, backgroundColor: '#ffffff', display: 'flex', flexDirection: 'column',
+          boxShadow: 'var(--shadow-drawer)', borderLeft: '1px solid var(--border-default)',
         }}
       >
-        <div className="flex justify-between items-center p-4" style={{ borderBottom: '1px solid var(--panel-border)' }}>
+        <div className="flex justify-between items-center p-3 px-4" style={{ borderBottom: '1px solid var(--border-default)' }}>
           <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
-            <h2 style={{ fontSize: '1.25rem', margin: 0 }}>
-              Trial <span className="text-primary">{displayName}</span>
+            <h2 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
+              Trial <span style={{ color: 'var(--primary)' }}>{displayName}</span>
             </h2>
             {trial.training_mode === 'continued' && (
               <span className="continuation-badge">续训自 {trial.parent_display_name || trial.parent_trial_id}</span>
@@ -149,16 +149,17 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
               <div className="flex items-center gap-2">
                 <input
                   className="input"
-                  style={{ width: 280 }}
+                  style={{ width: 260, height: 32 }}
                   value={draftName}
                   onChange={(event) => setDraftName(event.target.value)}
                   disabled={savingName}
                 />
-                <button className="btn btn-primary" onClick={saveTrialName} disabled={savingName}>
+                <button className="btn btn-primary" style={{ padding: '0.25rem 0.6rem', height: 32 }} onClick={saveTrialName} disabled={savingName}>
                   {savingName ? '保存中...' : '保存'}
                 </button>
                 <button
                   className="btn"
+                  style={{ padding: '0.25rem 0.6rem', height: 32 }}
                   onClick={() => {
                     setEditingName(false)
                     setDraftName(displayName)
@@ -169,8 +170,8 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                 </button>
               </div>
             ) : (
-              <button className="btn" onClick={() => setEditingName(true)} disabled={loading}>
-                <Edit2 size={16} /> 编辑
+              <button className="btn" style={{ padding: '0.2rem 0.5rem', height: 28, fontSize: '0.75rem' }} onClick={() => setEditingName(true)} disabled={loading}>
+                <Edit2 size={13} /> 编辑
               </button>
             )}
           </div>
@@ -181,20 +182,20 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
               disabled={loading || !continuation.can_continue}
               title={continuation.can_continue ? '从 last.pt 追加训练' : continuation.unavailable_reason || '当前不可续训'}
             >
-              <RotateCcw size={16} /> 继续训练
+              <RotateCcw size={14} /> 继续训练
             </button>
             <button className="btn" onClick={openModelEvaluation} disabled={loading || !data}>
-              <ScanSearch size={16} /> 模型评估
+              <ScanSearch size={14} /> 模型评估
             </button>
             <button className="btn" onClick={() => setShowExportDialog(true)} disabled={loading}>
-              <Download size={16} /> 导出 ONNX
+              <Download size={14} /> 导出 ONNX
             </button>
             {isRemote && (
               <button className="btn" onClick={syncRemote} disabled={syncing}>
-                <RefreshCw size={16} /> {syncing ? '同步中...' : '刷新远程数据'}
+                <RefreshCw size={14} /> {syncing ? '同步中...' : '刷新远程数据'}
               </button>
             )}
-            <button className="btn" style={{ padding: '0.25rem' }} onClick={onClose}><X size={20} /></button>
+            <button className="btn" style={{ padding: '0.3rem', width: 32, height: 32, justifyContent: 'center' }} onClick={onClose}><X size={16} /></button>
           </div>
         </div>
 
@@ -204,29 +205,31 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
           ) : !data ? (
             <div className="text-danger p-4">未能加载报告。</div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1fr)', gap: '2rem', padding: '1.5rem', alignItems: 'start' }}>
-              <div className="flex-col gap-4" style={{ minWidth: 0 }}>
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 600 }}>可视化</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(0, 1fr)', gap: '1.5rem', padding: '1.25rem', alignItems: 'start' }}>
+              <div className="flex-col gap-3" style={{ minWidth: 0 }}>
+                <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>可视化图像</h3>
                 <ImageGallery trialId={trialId} />
               </div>
 
-              <div className="flex-col gap-6">
+              <div className="flex-col gap-4">
                 {data.warnings?.length > 0 && (
-                  <div className="card" style={{ backgroundColor: 'rgba(245,158,11,0.06)' }}>
-                    <h3 className="text-warning mb-2" style={{ fontSize: '1rem' }}>警告</h3>
-                    <ul style={{ paddingLeft: '1.25rem', fontSize: '0.875rem' }} className="text-muted">
+                  <div className="card" style={{ backgroundColor: 'var(--status-queued-bg)', borderColor: 'var(--status-queued-border)' }}>
+                    <h3 className="text-warning mb-2" style={{ fontSize: '0.9rem', fontWeight: 700 }}>警告</h3>
+                    <ul style={{ paddingLeft: '1.25rem', fontSize: '0.8125rem' }} className="text-muted">
                       {data.warnings.map((warning: string, index: number) => <li key={index}>{warning}</li>)}
                     </ul>
                   </div>
                 )}
 
                 <section className="flex-col gap-2">
-                  <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>当前指标</h3>
+                  <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)' }}>当前指标</h3>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
                     {Object.entries(data.final_metrics || {}).map(([key, value]: [string, any]) => (
-                      <div key={key} className="card p-2 text-center" style={{ padding: '0.75rem' }}>
-                        <div className="text-muted" style={{ fontSize: '0.75rem', textTransform: 'uppercase' }}>{key}</div>
-                        <div style={{ fontSize: '1.25rem', fontWeight: 600 }}>{typeof value === 'number' ? value.toFixed(4) : value}</div>
+                      <div key={key} style={{ padding: '0.65rem 0.85rem', borderRadius: 'var(--radius-sm)', background: 'var(--bg-subtle)', border: '1px solid var(--border-default)' }}>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em' }}>{key}</div>
+                        <div className="font-mono" style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.15rem' }}>
+                          {typeof value === 'number' ? value.toFixed(4) : value}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -248,10 +251,10 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                             .sort((left: any, right: any) => left.class_id - right.class_id)
                             .map((item: any) => (
                               <tr key={item.class_id}>
-                                <td>{item.class_id}</td>
-                                <td>{item.class_name}</td>
+                                <td className="font-mono">{item.class_id}</td>
+                                <td style={{ fontWeight: 500 }}>{item.class_name}</td>
                                 {['precision', 'recall', 'map50', 'map50_95'].map((key) => (
-                                  <td key={key}>{typeof item[key] === 'number' ? item[key].toFixed(4) : '-'}</td>
+                                  <td key={key} className="font-mono">{typeof item[key] === 'number' ? item[key].toFixed(4) : '-'}</td>
                                 ))}
                               </tr>
                             ))}
@@ -264,21 +267,21 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                 </section>
 
                 <section className="flex-col gap-2">
-                  <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>资源占用 / 来源同步</h3>
+                  <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)' }}>资源占用 / 来源同步</h3>
                   <div className="table-wrapper">
                     <table>
                       <tbody>
-                        <tr><td className="text-muted">模型</td><td>{trial.model_display || trial.model || '-'}</td></tr>
+                        <tr><td className="text-muted" style={{ width: 120 }}>模型</td><td className="font-mono">{trial.model_display || trial.model || '-'}</td></tr>
                         <tr><td className="text-muted">模型来源</td><td>{trial.model_source || '-'}</td></tr>
                         <tr><td className="text-muted">参数来源</td><td>{trial.params_source || '-'}</td></tr>
                         <tr><td className="text-muted">任务状态</td><td>{trial.status || '-'}</td></tr>
                         {trial.remote_training_status && <tr><td className="text-muted">远程训练状态</td><td>{trial.remote_training_status}</td></tr>}
                         <tr><td className="text-muted">同步状态</td><td>{trial.sync_status || '-'}</td></tr>
-                        <tr><td className="text-muted">最近同步</td><td>{trial.last_synced_at || '-'}</td></tr>
-                        <tr><td className="text-muted">已同步 epoch</td><td>{trial.last_synced_epoch_count ?? '-'}</td></tr>
-                        <tr><td className="text-muted">训练开始</td><td>{formatDateTime(trial.created_at)}</td></tr>
-                        <tr><td className="text-muted">本地目录</td><td style={{ fontSize: '0.75rem', wordBreak: 'break-all' }}>{trial.run_dir || '-'}</td></tr>
-                        <tr><td className="text-muted">远程目录</td><td style={{ fontSize: '0.75rem', wordBreak: 'break-all' }}>{trial.remote_run_dir || '-'}</td></tr>
+                        <tr><td className="text-muted">最近同步</td><td className="font-mono">{trial.last_synced_at || '-'}</td></tr>
+                        <tr><td className="text-muted">已同步 epoch</td><td className="font-mono">{trial.last_synced_epoch_count ?? '-'}</td></tr>
+                        <tr><td className="text-muted">训练开始</td><td className="font-mono">{formatDateTime(trial.created_at)}</td></tr>
+                        <tr><td className="text-muted">本地目录</td><td className="font-mono" style={{ fontSize: '0.72rem', wordBreak: 'break-all' }}>{trial.run_dir || '-'}</td></tr>
+                        <tr><td className="text-muted">远程目录</td><td className="font-mono" style={{ fontSize: '0.72rem', wordBreak: 'break-all' }}>{trial.remote_run_dir || '-'}</td></tr>
                         {trial.sync_error && <tr><td className="text-muted">同步错误</td><td className="text-danger">{trial.sync_error}</td></tr>}
                       </tbody>
                     </table>
@@ -286,33 +289,33 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                 </section>
 
                 <section className="flex-col gap-2">
-                  <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>数据集分析</h3>
+                  <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)' }}>数据集分析</h3>
                   {isRemote && !datasetAnalysis.totals && (
-                    <div className="text-muted">此任务未保存训练时的数据集统计快照，刷新不会使用当前数据集补算历史统计。</div>
+                    <div className="text-muted" style={{ fontSize: '0.78rem' }}>此任务未保存训练时的数据集统计快照，刷新不会使用当前数据集补算历史统计。</div>
                   )}
                   {isRemote && datasetAnalysis.totals && (
-                    <div className="text-muted">已保存的数据集统计快照，刷新远程数据不会重新计算。</div>
+                    <div className="text-muted" style={{ fontSize: '0.78rem' }}>已保存的数据集统计快照，刷新远程数据不会重新计算。</div>
                   )}
                   {datasetAnalysis.totals && (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
-                    <div className="card p-2 text-center" style={{ padding: '0.75rem' }}>
-                      <div className="text-muted" style={{ fontSize: '0.75rem' }}>Train 实例数</div>
-                      <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{datasetTotals.train_instances ?? 0}</div>
-                      <div className="text-muted" style={{ fontSize: '0.75rem', marginTop: '0.2rem' }}>
-                        图像 {datasetSplits.train?.image_count ?? 0} / 标签 {datasetSplits.train?.label_file_count ?? 0}
+                    <div style={{ padding: '0.65rem 0.75rem', borderRadius: 'var(--radius-sm)', background: 'var(--bg-subtle)', border: '1px solid var(--border-default)', textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Train 实例数</div>
+                      <div className="font-mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.15rem' }}>{datasetTotals.train_instances ?? 0}</div>
+                      <div className="font-mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                        图 {datasetSplits.train?.image_count ?? 0} / 标 {datasetSplits.train?.label_file_count ?? 0}
                       </div>
                     </div>
-                    <div className="card p-2 text-center" style={{ padding: '0.75rem' }}>
-                      <div className="text-muted" style={{ fontSize: '0.75rem' }}>Val 实例数</div>
-                      <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{datasetTotals.val_instances ?? 0}</div>
-                      <div className="text-muted" style={{ fontSize: '0.75rem', marginTop: '0.2rem' }}>
-                        图像 {datasetSplits.val?.image_count ?? 0} / 标签 {datasetSplits.val?.label_file_count ?? 0}
+                    <div style={{ padding: '0.65rem 0.75rem', borderRadius: 'var(--radius-sm)', background: 'var(--bg-subtle)', border: '1px solid var(--border-default)', textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Val 实例数</div>
+                      <div className="font-mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.15rem' }}>{datasetTotals.val_instances ?? 0}</div>
+                      <div className="font-mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                        图 {datasetSplits.val?.image_count ?? 0} / 标 {datasetSplits.val?.label_file_count ?? 0}
                       </div>
                     </div>
-                    <div className="card p-2 text-center" style={{ padding: '0.75rem' }}>
-                      <div className="text-muted" style={{ fontSize: '0.75rem' }}>总计 / 类别数</div>
-                      <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{datasetTotals.total_instances ?? 0}</div>
-                      <div className="text-muted" style={{ fontSize: '0.75rem', marginTop: '0.2rem' }}>
+                    <div style={{ padding: '0.65rem 0.75rem', borderRadius: 'var(--radius-sm)', background: 'var(--bg-subtle)', border: '1px solid var(--border-default)', textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>总计 / 类别</div>
+                      <div className="font-mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.15rem' }}>{datasetTotals.total_instances ?? 0}</div>
+                      <div className="font-mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                         类别 {datasetTotals.class_count ?? 0}
                       </div>
                     </div>

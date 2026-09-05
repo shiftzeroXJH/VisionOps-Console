@@ -80,17 +80,11 @@ export function CreateExperimentDialog({ existingProjects, onClose, onCreated }:
 
   return (
     <div
-      style={{
-        position: 'fixed', inset: 0,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        backdropFilter: 'blur(2px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 100,
-      }}
+      className="dialog-overlay"
       onClick={(e) => { if (e.target === e.currentTarget && !loading) onClose() }}
     >
-      <div className="card" style={{ width: '500px', maxWidth: '100%' }}>
-        <h2 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>创建实验</h2>
+      <div className="card dialog-card" style={{ width: '480px' }}>
+        <h2 style={{ marginBottom: '1rem', fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-primary)' }}>创建实验</h2>
         {error && <div className="p-4" style={{ backgroundColor: 'var(--danger-color)', color: '#fff', borderRadius: 'var(--radius-sm)', marginBottom: '1rem' }}>{error}</div>}
         <form className="flex-col gap-4" onSubmit={handleSubmit}>
           <div className="flex-col gap-2">

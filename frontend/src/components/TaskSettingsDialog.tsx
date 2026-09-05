@@ -36,15 +36,33 @@ export function TaskSettingsDialog({ experimentId, onClose, onSaved }: Props) {
     } catch (err: any) { setError(err?.detail?.error || '保存任务设置失败') } finally { setBusy(false) }
   }
 
-  return <div style={{ position: 'fixed', inset: 0, zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)' }} onClick={onClose} /><div className="card flex-col gap-3" style={{ position: 'relative', width: 720, maxWidth: '96vw', maxHeight: '92vh', overflow: 'auto' }}>
-    <div className="flex justify-between items-center"><h2 style={{ fontSize: '1.2rem' }}>任务设置</h2><button className="btn" onClick={onClose}>关闭</button></div>
-    {error && <div className="text-danger p-2">{error}</div>}
-    <label>任务名称<input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
-    <label>本地数据集目录<input className="input" value={form.dataset_root} onChange={(e) => setForm({ ...form, dataset_root: e.target.value })} /></label>
-    <label>本地数据集 YAML<input className="input" value={form.dataset_yaml} onChange={(e) => setForm({ ...form, dataset_yaml: e.target.value })} /></label>
-    <label>本地默认模型<input className="input" value={form.pretrained_model} onChange={(e) => setForm({ ...form, pretrained_model: e.target.value })} /></label>
-    <label>服务器<select className="input" value={serverId} onChange={(e) => setServerId(e.target.value)}><option value="">选择服务器</option>{servers.map((s) => <option key={s.remote_server_id} value={s.remote_server_id}>{s.name} ({s.host})</option>)}</select></label>
-    {serverId && <><label>远程数据集目录<input className="input" value={form.remote_dataset_root} onChange={(e) => setForm({ ...form, remote_dataset_root: e.target.value })} /></label><label>远程数据集 YAML<input className="input" value={form.remote_dataset_yaml} onChange={(e) => setForm({ ...form, remote_dataset_yaml: e.target.value })} /></label><label>远程默认模型<input className="input" value={form.remote_pretrained_model} onChange={(e) => setForm({ ...form, remote_pretrained_model: e.target.value })} /></label></>}
-    <div className="flex justify-end gap-2"><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={() => void save()} disabled={busy}>{busy ? '保存中...' : '保存设置'}</button></div>
-  </div></div>
+  return (
+    <div className="dialog-overlay" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose() }}>
+      <div className="card dialog-card flex-col gap-3" style={{ width: 640, maxHeight: '92vh', overflowY: 'auto' }}>
+        <div className="flex justify-between items-center" style={{ borderBottom: '1px solid var(--border-default)', paddingBottom: '0.75rem' }}>
+          <h2 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-primary)' }}>任务设置</h2>
+          <button className="btn" style={{ padding: '0.25rem 0.5rem' }} onClick={onClose}>关闭</button>
+        </div>
+        {error && <div className="text-danger p-2">{error}</div>}
+        <div className="flex-col gap-3 pt-2">
+          <label style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-regular)' }}>任务名称<input className="input mt-1" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
+          <label style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-regular)' }}>本地数据集目录<input className="input mt-1 font-mono" value={form.dataset_root} onChange={(e) => setForm({ ...form, dataset_root: e.target.value })} /></label>
+          <label style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-regular)' }}>本地数据集 YAML<input className="input mt-1 font-mono" value={form.dataset_yaml} onChange={(e) => setForm({ ...form, dataset_yaml: e.target.value })} /></label>
+          <label style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-regular)' }}>本地默认模型<input className="input mt-1 font-mono" value={form.pretrained_model} onChange={(e) => setForm({ ...form, pretrained_model: e.target.value })} /></label>
+          <label style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-regular)' }}>服务器<select className="input mt-1" value={serverId} onChange={(e) => setServerId(e.target.value)}><option value="">选择服务器</option>{servers.map((s) => <option key={s.remote_server_id} value={s.remote_server_id}>{s.name} ({s.host})</option>)}</select></label>
+          {serverId && (
+            <div className="flex-col gap-3 p-3 mt-1" style={{ borderRadius: 'var(--radius-sm)', background: 'var(--bg-subtle)', border: '1px solid var(--border-default)' }}>
+              <label style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-regular)' }}>远程数据集目录<input className="input mt-1 font-mono" value={form.remote_dataset_root} onChange={(e) => setForm({ ...form, remote_dataset_root: e.target.value })} /></label>
+              <label style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-regular)' }}>远程数据集 YAML<input className="input mt-1 font-mono" value={form.remote_dataset_yaml} onChange={(e) => setForm({ ...form, remote_dataset_yaml: e.target.value })} /></label>
+              <label style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-regular)' }}>远程默认模型<input className="input mt-1 font-mono" value={form.remote_pretrained_model} onChange={(e) => setForm({ ...form, remote_pretrained_model: e.target.value })} /></label>
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 pt-3" style={{ borderTop: '1px solid var(--border-default)' }}>
+          <button className="btn" onClick={onClose}>取消</button>
+          <button className="btn btn-primary" onClick={() => void save()} disabled={busy}>{busy ? '保存中...' : '保存设置'}</button>
+        </div>
+      </div>
+    </div>
+  )
 }

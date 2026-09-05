@@ -32,18 +32,12 @@ export function DeleteDialog({ title, message, dangerousMessage, onConfirm, onCl
 
   return (
     <div
-      style={{
-        position: 'fixed', inset: 0,
-        backgroundColor: 'rgba(0,0,0,0.4)',
-        backdropFilter: 'blur(4px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 200,
-      }}
+      className="dialog-overlay"
       onClick={(e) => { if (e.target === e.currentTarget && !loading) onClose() }}
     >
-      <div className="card" style={{ width: '450px', maxWidth: '100%', border: '1px solid var(--danger-color)' }}>
-        <h2 style={{ marginBottom: '1rem', fontSize: '1.25rem', color: 'var(--danger-color)' }}>{title}</h2>
-        <p style={{ marginBottom: '1rem' }}>{message}</p>
+      <div className="card dialog-card" style={{ width: '440px', border: '1px solid #fecaca' }}>
+        <h2 style={{ marginBottom: '0.75rem', fontSize: '1.15rem', fontWeight: 700, color: 'var(--danger-color)' }}>{title}</h2>
+        <p style={{ marginBottom: '1rem', color: 'var(--text-regular)', fontSize: '0.875rem' }}>{message}</p>
 
         {dangerousMessage && (
           <div className="p-3 mb-4" style={{ backgroundColor: 'rgba(239,68,68,0.1)', borderRadius: 'var(--radius-sm)' }}>

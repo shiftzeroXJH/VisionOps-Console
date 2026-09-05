@@ -97,7 +97,7 @@ export function ModelSelector({ value, models, disabled, onChange }: Props) {
               <div className="model-options" role="listbox" aria-label="训练模型列表" style={popupPosition}>
                 {filteredModels.map((model) => (
                   <button key={model.trial_id} type="button" role="option" aria-selected={model.trial_id === value.trial_id} onMouseDown={(event) => event.preventDefault()} onClick={() => selectModel(model)}>
-                    <span>{model.trial_name}</span>
+                    <span className="font-mono">{model.trial_name}</span>
                     <small>{model.project} / {model.experiment_name} · {taskLabel(model.task_type)}</small>
                     {model.trial_id === value.trial_id && <Check size={15} />}
                   </button>
@@ -107,7 +107,7 @@ export function ModelSelector({ value, models, disabled, onChange }: Props) {
             )}
           </div>
           <select
-            className="input checkpoint-select"
+            className="input checkpoint-select font-mono"
             aria-label="Checkpoint"
             value={selected ? value.checkpoint_name || selected.default_checkpoint : ''}
             disabled={disabled || !selected}
@@ -121,7 +121,7 @@ export function ModelSelector({ value, models, disabled, onChange }: Props) {
         </>
       ) : (
         <>
-          <input className="input model-input" value={value.model_path} disabled={disabled} placeholder="D:\models\best.pt 或 model.onnx" onChange={(event) => onChange({ ...value, model_path: event.target.value })} />
+          <input className="input model-input font-mono" value={value.model_path} disabled={disabled} placeholder="D:\models\best.pt 或 model.onnx" onChange={(event) => onChange({ ...value, model_path: event.target.value })} />
           <select className="input task-select" aria-label="模型任务类型" value={value.task_type} disabled={disabled} onChange={(event) => onChange({ ...value, task_type: event.target.value as ModelSelection['task_type'] })}>
             <option value="auto">自动识别</option>
             <option value="detection">目标检测</option>

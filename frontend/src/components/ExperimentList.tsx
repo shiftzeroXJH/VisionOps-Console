@@ -26,6 +26,14 @@ const statusTextMap: Record<string, string> = {
   INTERRUPTED_OR_FAILED: '任务中断/失败',
 }
 
+const statusPillClassMap: Record<string, string> = {
+  NOT_STARTED: 'status-pill-neutral',
+  QUEUED: 'status-pill-queued',
+  TRAINING: 'status-pill-running',
+  COMPLETED: 'status-pill-completed',
+  INTERRUPTED_OR_FAILED: 'status-pill-danger',
+}
+
 const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase()
 
 const formatDate = (value: string | undefined) => {
@@ -157,38 +165,32 @@ export function ExperimentList({ experiments, activeId, onSelect, onExperimentUp
                 {isOpen && group.experiments.map((exp) => (
                   <div
                     key={exp.experiment_id}
-                    className={clsx('card experiment-card', { active: exp.experiment_id === activeId })}
-                    style={{
-                      cursor: 'pointer',
-                      transition: 'background-color var(--transition-fast)',
-                      borderColor: exp.experiment_id === activeId ? 'var(--primary-color)' : 'var(--panel-border)',
-                      backgroundColor: exp.experiment_id === activeId ? 'rgba(59, 130, 246, 0.05)' : undefined,
-                    }}
+                    className={clsx('experiment-card', { active: exp.experiment_id === activeId })}
                     onClick={() => onSelect(exp.experiment_id)}
                   >
                     <div className="experiment-card-header">
                       <span className="experiment-title">{exp.description}</span>
+                      <span className={clsx('status-pill', statusPillClassMap[exp.status] || 'status-pill-neutral')}>
+                        <span className="status-dot" />
+                        {statusTextMap[exp.status] || exp.status}
+                      </span>
                     </div>
 
                     <div className="experiment-meta">
                       <span>{formatDate(exp.latest_trial?.created_at)}</span>
-                      <span>类型: {exp.task_type}</span>
+                      <span>{exp.task_type}</span>
                     </div>
 
-                    <div className="experiment-metrics">
-                      <div className="metric-row">
-                        <span>状态</span>
-                        <span style={{ color: 'var(--text-main)' }}>{statusTextMap[exp.status] || exp.status}</span>
-                      </div>
-                      {exp.best_metric && (
-                        <div className="metric-row" style={{ marginTop: '0.25rem' }}>
-                          <span>当前最优 mAP50-95</span>
-                          <span style={{ color: 'var(--text-main)' }}>
+                    {exp.best_metric && (
+                      <div className="experiment-metrics">
+                        <div className="metric-row">
+                          <span>最优 mAP50-95</span>
+                          <span className="font-mono">
                             {exp.best_metric.value.toFixed(4)}
                           </span>
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </section>

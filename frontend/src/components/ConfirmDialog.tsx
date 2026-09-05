@@ -39,21 +39,12 @@ export function ConfirmDialog({
 
   return (
     <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        backgroundColor: 'rgba(0,0,0,0.4)',
-        backdropFilter: 'blur(4px)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 200,
-      }}
+      className="dialog-overlay"
       onClick={(e) => { if (e.target === e.currentTarget && !loading) onClose() }}
     >
-      <div className="card" style={{ width: '450px', maxWidth: '100%' }}>
-        <h2 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>{title}</h2>
-        <p style={{ marginBottom: '1rem' }}>{message}</p>
+      <div className="card dialog-card" style={{ width: '440px' }}>
+        <h2 style={{ marginBottom: '0.75rem', fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-primary)' }}>{title}</h2>
+        <p style={{ marginBottom: '1rem', color: 'var(--text-regular)', fontSize: '0.875rem' }}>{message}</p>
 
         <div className="flex justify-end gap-2 pt-4" style={{ borderTop: '1px solid var(--panel-border)' }}>
           <button className="btn" onClick={onClose} disabled={loading}>取消</button>

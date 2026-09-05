@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleDashed, Loader2, Trash2, XCircle } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 
 interface Props {
   data: any
@@ -58,35 +58,83 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
   }
 
   const renderStatus = (row: any) => {
-    const status = row.status
     if (row.remote_training_status === 'maybe_stopped') {
-      return <span title="远程训练可能已停止"><XCircle size={16} className="text-danger" /></span>
+      return (
+        <span className="status-pill status-pill-danger" title="远程训练可能已停止">
+          <span className="status-dot" />
+          异常中断
+        </span>
+      )
     }
-    switch (status) {
+    switch (row.status) {
       case 'COMPLETED':
-        return <CheckCircle2 size={16} className="text-success" />
+        return (
+          <span className="status-pill status-pill-completed">
+            <span className="status-dot" />
+            完成
+          </span>
+        )
       case 'INTERRUPTED_OR_FAILED':
-        return <XCircle size={16} className="text-danger" />
+        return (
+          <span className="status-pill status-pill-danger">
+            <span className="status-dot" />
+            失败
+          </span>
+        )
       case 'TRAINING':
-        return <Loader2 size={16} className="text-warning" style={{ animation: 'spin 1s linear infinite' }} />
+        return (
+          <span className="status-pill status-pill-running">
+            <span className="status-dot" />
+            训练中
+          </span>
+        )
       case 'QUEUED':
-        return <CircleDashed size={16} className="text-warning" />
+        return (
+          <span className="status-pill status-pill-queued">
+            <span className="status-dot" />
+            排队中
+          </span>
+        )
       default:
-        return status
+        return <span className="status-pill status-pill-neutral"><span className="status-dot" />{row.status}</span>
     }
   }
 
   const renderDelta = (val: any) => {
-    if (typeof val !== 'number') return '-'
-    if (val > 0) return <span className="text-success">+{val.toFixed(4)}</span>
-    if (val < 0) return <span className="text-danger">{val.toFixed(4)}</span>
-    return <span className="text-muted">0.0000</span>
+    if (typeof val !== 'number') return <span className="font-mono text-muted">-</span>
+    if (val > 0) return <span className="font-mono text-success" style={{ fontWeight: 600 }}>+{val.toFixed(4)}</span>
+    if (val < 0) return <span className="font-mono text-danger" style={{ fontWeight: 600 }}>{val.toFixed(4)}</span>
+    return <span className="font-mono text-muted">0.0000</span>
   }
+
+  const isMonoColumn = (key: string) =>
+    ['iteration', 'map50_95', 'fitness', 'map50', 'delta_map50_95', 'precision', 'recall',
+     'best_epoch', 'epochs_completed', 'cumulative_epochs', 'imgsz', 'batch', 'lr0', 'patience'].includes(key)
 
   const cellValue = (row: any, key: string) => {
     if (key === 'status') return renderStatus(row)
     if (key === 'delta_map50_95') return renderDelta(row.delta_map50_95)
-    if (key === 'training_mode') return row.training_mode === 'continued' ? '续训' : '常规训练'
+    if (key === 'display_name') {
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600 }}>
+          {row.is_best && (
+            <span className="status-pill status-pill-success" style={{ fontSize: '10px', padding: '0 4px', height: '16px', lineHeight: '16px' }}>
+              BEST
+            </span>
+          )}
+          <span>{row.display_name}</span>
+        </span>
+      )
+    }
+    if (key === 'training_mode') {
+      return row.training_mode === 'continued' ? (
+        <span style={{ display: 'inline-block', padding: '1px 5px', borderRadius: 3, background: '#f0fdfa', color: '#0f766e', border: '1px solid #ccfbf1', fontSize: '11px', fontWeight: 600 }}>
+          续训
+        </span>
+      ) : (
+        <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>常规</span>
+      )
+    }
     if (['imgsz', 'batch', 'lr0', 'patience'].includes(key)) return formatValue(row.params?.[key])
     return formatValue(row[key])
   }
@@ -102,7 +150,7 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
               </th>
             ))}
             <th>备注</th>
-            <th>操作</th>
+            <th style={{ width: 44, textAlign: 'center' }}>操作</th>
           </tr>
         </thead>
         <tbody>
@@ -110,22 +158,50 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
             <tr
               key={row.trial_id}
               onClick={() => onRowClick(row.trial_id)}
-              style={{ cursor: 'pointer', backgroundColor: row.is_best ? 'rgba(16,185,129,0.06)' : undefined }}
+              style={{
+                cursor: 'pointer',
+                backgroundColor: row.is_best ? 'rgba(5, 150, 105, 0.04)' : undefined,
+              }}
             >
-              {cols.map((col) => (
-                <td key={col} style={{ fontWeight: isMetricMaximum(row, col) ? 700 : undefined }}>
-                  {cellValue(row, col)}
-                </td>
-              ))}
+              {cols.map((col) => {
+                const isMax = isMetricMaximum(row, col)
+                const isMono = isMonoColumn(col)
+                return (
+                  <td
+                    key={col}
+                    className={isMono ? 'font-mono' : undefined}
+                    style={{
+                      fontWeight: isMax ? 700 : undefined,
+                      color: isMax ? 'var(--primary)' : undefined,
+                    }}
+                  >
+                    {cellValue(row, col)}
+                  </td>
+                )
+              })}
               <td style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.note || '-'}</td>
-              <td>
+              <td style={{ textAlign: 'center' }}>
                 <button
-                  className="btn btn-danger"
-                  style={{ padding: '0.2rem 0.4rem', backgroundColor: 'transparent', color: 'var(--danger-color)', border: 'none', boxShadow: 'none' }}
+                  className="icon-btn"
+                  style={{
+                    width: 26,
+                    height: 26,
+                    padding: 0,
+                    borderRadius: 4,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: 'transparent',
+                    color: 'var(--text-muted)',
+                    border: 'none',
+                    cursor: 'pointer',
+                  }}
                   onClick={(event) => { event.stopPropagation(); onRequestDeleteTrial({ trial_id: row.trial_id, display_name: row.display_name }) }}
                   title="删除训练记录"
+                  onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger-color)'; e.currentTarget.style.backgroundColor = '#fef2f2' }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.backgroundColor = 'transparent' }}
                 >
-                  <Trash2 size={16} />
+                  <Trash2 size={14} />
                 </button>
               </td>
             </tr>

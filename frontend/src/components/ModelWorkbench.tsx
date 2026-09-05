@@ -179,7 +179,7 @@ function ClassFilter({ classes, boxes, visible, onChange }: { classes: ClassInfo
             }} />
             <span className="class-swatch" style={{ background: `hsl(${(item.class_id * 67 + 145) % 360} 68% 48%)` }} />
             <span title={item.class_name}>{item.class_name}</span>
-            <strong>{counts.get(item.class_id) || 0}</strong>
+            <strong className="font-mono">{counts.get(item.class_id) || 0}</strong>
           </label>
         ))}
         {!classes.length && <div className="workbench-empty-small">运行模型后显示类别</div>}
@@ -400,8 +400,8 @@ function InferenceView({ models, model, onModelChange }: { models: WorkbenchMode
     <div className="workbench-body">
       <div className="workbench-toolbar">
         <ModelSelector models={models} value={model} disabled={busy} onChange={onModelChange} />
-        <label className="compact-field">conf<input className="input" type="number" min="0.001" max="1" step="0.01" value={conf} onChange={(event) => setConf(Number(event.target.value))} /></label>
-        <label className="compact-field">imgsz<input className="input" type="number" min="32" max="4096" step="32" value={imgsz} disabled={autoImgsz} onChange={(event) => setImgsz(Number(event.target.value))} /></label>
+        <label className="compact-field">conf<input className="input font-mono" type="number" min="0.001" max="1" step="0.01" value={conf} onChange={(event) => setConf(Number(event.target.value))} /></label>
+        <label className="compact-field">imgsz<input className="input font-mono" type="number" min="32" max="4096" step="32" value={imgsz} disabled={autoImgsz} onChange={(event) => setImgsz(Number(event.target.value))} /></label>
         <label className="switch-field" title="使用模型 checkpoint 中保存的 imgsz"><input type="checkbox" checked={autoImgsz} onChange={(event) => setAutoImgsz(event.target.checked)} />自动</label>
         <input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => { void upload(Array.from(event.target.files || [])); event.target.value = '' }} />
         <button className="btn" disabled={busy} onClick={() => fileRef.current?.click()}><ImagePlus size={16} /> 导入图片</button>
@@ -500,9 +500,9 @@ function EvaluationView({ models, model, onModelChange, initialDatasetPath, init
             {evaluationHistory.map((item) => <option key={item.evaluation_id} value={item.evaluation_id}>{evaluationHistoryLabel(item)}</option>)}
           </select></span>
         </label>
-        <label className="compact-field">结果 conf<input className="input" type="number" min="0.001" max="1" step="0.01" value={conf} onChange={(event) => setConf(Number(event.target.value))} /></label>
-        <label className="compact-field">imgsz<input className="input" type="number" min="32" step="32" value={imgsz} onChange={(event) => setImgsz(Number(event.target.value))} /></label>
-        <label className="compact-field">batch<input className="input" type="number" min="1" value={batch} onChange={(event) => setBatch(Number(event.target.value))} /></label>
+        <label className="compact-field">结果 conf<input className="input font-mono" type="number" min="0.001" max="1" step="0.01" value={conf} onChange={(event) => setConf(Number(event.target.value))} /></label>
+        <label className="compact-field">imgsz<input className="input font-mono" type="number" min="32" step="32" value={imgsz} onChange={(event) => setImgsz(Number(event.target.value))} /></label>
+        <label className="compact-field">batch<input className="input font-mono" type="number" min="1" value={batch} onChange={(event) => setBatch(Number(event.target.value))} /></label>
         <button className="btn" disabled={busy || !datasetPath} onClick={() => void inspect()}><FolderOpen size={16} /> 检查</button>
         <button className="btn btn-primary" disabled={busy || !datasetPath || !modelReady} onClick={() => void evaluate()}>{busy ? <Loader2 className="spin" size={16} /> : <ActivitySquare size={16} />} 开始评估</button>
         {inspection && <span className="dataset-ok"><CheckCircle2 size={15} /> {inspection.dataset_type.toUpperCase()} · {inspection.image_count} 张</span>}
@@ -539,12 +539,12 @@ function MetricsBand({ result, expanded, onToggle }: { result: EvaluationResult;
       </header>
       {expanded && <>
         <div className="metric-summary">
-          {Object.entries(labels).map(([key, label]) => <div key={key}><span>{label}</span><strong>{typeof result.metrics?.[key] === 'number' ? result.metrics[key].toFixed(4) : '-'}</strong></div>)}
-          <p title={result.predictions_dir}>XML：{result.predictions_dir}</p>
+          {Object.entries(labels).map(([key, label]) => <div key={key}><span>{label}</span><strong className="font-mono">{typeof result.metrics?.[key] === 'number' ? result.metrics[key].toFixed(4) : '-'}</strong></div>)}
+          <p title={result.predictions_dir}>XML：<span className="font-mono">{result.predictions_dir}</span></p>
         </div>
         <div className="metric-table-wrap">
-          <table><thead><tr><th>类别</th><th>mAP50</th><th>mAP50-95</th><th>Precision</th><th>Recall</th></tr></thead>
-            <tbody>{(result.per_class_metrics || []).map((row) => <tr key={row.class_id}><td>{row.class_name}</td><td>{formatMetric(row.map50)}</td><td>{formatMetric(row.map50_95)}</td><td>{formatMetric(row.precision)}</td><td>{formatMetric(row.recall)}</td></tr>)}</tbody>
+          <table><thead><tr><th>类别</th><th className="font-mono">mAP50</th><th className="font-mono">mAP50-95</th><th className="font-mono">Precision</th><th className="font-mono">Recall</th></tr></thead>
+            <tbody>{(result.per_class_metrics || []).map((row) => <tr key={row.class_id}><td>{row.class_name}</td><td className="font-mono">{formatMetric(row.map50)}</td><td className="font-mono">{formatMetric(row.map50_95)}</td><td className="font-mono">{formatMetric(row.precision)}</td><td className="font-mono">{formatMetric(row.recall)}</td></tr>)}</tbody>
           </table>
         </div>
       </>}
