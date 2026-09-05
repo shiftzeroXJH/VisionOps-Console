@@ -1,11 +1,19 @@
 import { ActivitySquare, ArrowRight, ScanSearch } from 'lucide-react'
+import { VisionOpsLogo } from './VisionOpsLogo'
 
 export function HomePage() {
   return (
     <main className="home-page">
       <header className="home-header">
-        <div className="home-brand"><ActivitySquare size={22} /> YOLO Vision</div>
-        <span>工业视觉训练与验证工具</span>
+        <div className="home-brand">
+          <VisionOpsLogo size={28} />
+          <div className="brand-logotype" style={{ fontSize: '1.2rem' }}>
+            <span className="brand-logotype-vision">VISION</span>
+            <span className="brand-logotype-ops">OPS</span>
+            <span className="brand-pulse-dot" />
+          </div>
+        </div>
+        <span>半导体 AOI 工业视觉与训练平台</span>
       </header>
       <section className="home-content">
         <div className="home-title-block">

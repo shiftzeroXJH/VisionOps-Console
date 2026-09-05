@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import traceback
@@ -14,7 +15,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _atomic_json(path: Path, payload: dict) -> None:
+def _atomic_json(path: Path, payload: object) -> None:
     fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -118,9 +119,123 @@ def check_status(run_dir: Path, trial_id: str) -> dict:
         return unknown
 
 
+def _save_per_class_metrics(request: dict, run_dir: Path) -> None:
+    """Validate best.pt and persist the same per-class metrics as local training."""
+    best_weight = run_dir / "weights" / "best.pt"
+    if not best_weight.exists():
+        print("per-class metrics skipped: best.pt not found", file=sys.stderr)
+        return
+    try:
+        from ultralytics import YOLO
+
+        result = YOLO(str(best_weight)).val(
+            data=request["dataset_yaml"],
+            split="val",
+            imgsz=int(request["params"]["imgsz"]),
+            batch=int(request["params"]["batch"]),
+            plots=False,
+            save=False,
+            verbose=False,
+        )
+        metrics = _extract_per_class_metrics(result, str(request.get("task_type", "detection")))
+        _atomic_json(run_dir / "per_class_metrics.json", metrics)
+    except Exception as exc:
+        print(f"per-class metrics skipped: {exc}", file=sys.stderr)
+
+
+def _extract_per_class_metrics(result: object, task_type: str) -> list[dict]:
+    component_name = {"detection": "box", "segment": "seg", "obb": "obb"}.get(task_type, "box")
+    component = getattr(result, component_name, None)
+    if component is None:
+        return []
+
+    names = _class_names(getattr(result, "names", {}))
+    precision = _numeric_list(getattr(component, "p", None))
+    recall = _numeric_list(getattr(component, "r", None))
+    map50 = _numeric_list(getattr(component, "ap50", None))
+    map50_95 = _numeric_list(getattr(component, "maps", None))
+    class_indexes = _class_indexes(getattr(component, "ap_class_index", None))
+    if not class_indexes:
+        class_indexes = list(range(max(len(precision), len(recall), len(map50))))
+
+    metric_positions = {class_id: index for index, class_id in enumerate(class_indexes)}
+    rows = []
+    for class_id in sorted(set(names) | set(class_indexes)):
+        metric_index = metric_positions.get(class_id)
+        map_index = class_id if len(map50_95) > class_id else metric_index
+        rows.append({
+            "class_id": class_id,
+            "class_name": names.get(class_id, f"class_{class_id}"),
+            "precision": _metric_value(precision, metric_index),
+            "recall": _metric_value(recall, metric_index),
+            "map50": _metric_value(map50, metric_index),
+            "map50_95": _metric_value(map50_95, map_index),
+        })
+    return rows
+
+
+def _class_names(raw_names: object) -> dict[int, str]:
+    values = raw_names.items() if isinstance(raw_names, dict) else enumerate(raw_names or [])
+    names = {}
+    for raw_id, raw_name in values:
+        try:
+            names[int(raw_id)] = str(raw_name)
+        except (TypeError, ValueError):
+            continue
+    return names
+
+
+def _class_indexes(value: object) -> list[int]:
+    indexes = []
+    for item in _to_list(value):
+        try:
+            indexes.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return indexes
+
+
+def _numeric_list(value: object) -> list[float | None]:
+    return [_finite_float(item) for item in _to_list(value)]
+
+
+def _to_list(value: object) -> list:
+    if value is None:
+        return []
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    try:
+        return list(value)
+    except TypeError:
+        return [value]
+
+
+def _finite_float(value: object) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _metric_value(values: list[float | None], index: int | None) -> float | None:
+    if index is None or index < 0 or index >= len(values):
+        return None
+    return values[index]
+
+
 def main() -> int:
     if len(sys.argv) == 4 and sys.argv[1] == "--status":
         print(json.dumps(check_status(Path(sys.argv[2]), sys.argv[3])))
+        return 0
+    if len(sys.argv) == 3 and sys.argv[1] == "--metrics":
+        request_path = Path(sys.argv[2]).resolve()
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        _save_per_class_metrics(request, Path(request["run_dir"]).resolve())
         return 0
     if len(sys.argv) != 2:
         print("usage: remote_train_worker.py request.json", file=sys.stderr)
@@ -177,6 +292,7 @@ def main() -> int:
         train_params.update(params)
         train_params.update(project=str(run_dir.parent), name=run_dir.name, exist_ok=True)
         model.train(**train_params)
+        _save_per_class_metrics(request, run_dir)
         _status(status_path, "completed", started_at=None, finished_at=_now(), **common)
         return 0
     except BaseException as exc:

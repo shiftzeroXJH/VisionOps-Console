@@ -149,11 +149,76 @@ body,
 .sidebar-brand {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.55rem;
   flex: 0 0 auto;
-  color: var(--primary-color);
-  font-weight: 600;
+  color: var(--text-primary);
+  font-weight: 700;
   white-space: nowrap;
+  text-decoration: none;
+}
+
+/* VisionOps Brand Logo & Artistic Typography */
+.visionops-logo-svg {
+  filter: drop-shadow(0 0 4px rgba(6, 182, 212, 0.35));
+  transition: transform var(--transition-fast), filter var(--transition-fast);
+}
+.sidebar-brand:hover .visionops-logo-svg,
+.home-brand:hover .visionops-logo-svg {
+  filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.65));
+  transform: scale(1.05);
+}
+
+.brand-logotype {
+  display: inline-flex;
+  align-items: center;
+  letter-spacing: -0.01em;
+  user-select: none;
+  line-height: 1;
+}
+
+.brand-logotype-vision {
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.brand-logotype-ops {
+  font-weight: 900;
+  background: linear-gradient(135deg, #0284c7 0%, #06b6d4 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-left: 2px;
+}
+
+.brand-pulse-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: #06b6d4;
+  margin-left: 5px;
+  box-shadow: 0 0 6px rgba(6, 182, 212, 0.85);
+  animation: vo-pulse 2.2s ease-in-out infinite;
+  display: inline-block;
+}
+
+@keyframes vo-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+
+.brand-logotype-ops-badge {
+  font-size: 0.68rem;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.12rem 0.35rem;
+  margin-left: 0.3rem;
+  border-radius: var(--radius-xs);
+  background: linear-gradient(135deg, #0284c7 0%, #0891b2 100%);
+  color: #ffffff;
+  box-shadow: 0 1px 2px rgba(2, 132, 199, 0.25);
+  line-height: 1.1;
 }
 
 .sidebar-primary-actions {

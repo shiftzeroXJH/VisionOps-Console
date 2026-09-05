@@ -3,7 +3,8 @@ import { api, type Experiment, type TrainingTaskList } from './api'
 import { ExperimentList } from './components/ExperimentList'
 import { Workspace } from './components/Workspace'
 import { CreateExperimentDialog } from './components/CreateExperimentDialog'
-import { Settings, ActivitySquare, Home, ListTodo, Plus } from 'lucide-react'
+import { Settings, Home, ListTodo, Plus } from 'lucide-react'
+import { VisionOpsLogo } from './components/VisionOpsLogo'
 import { SettingsDialog } from './components/SettingsDialog'
 import { HomePage } from './components/HomePage'
 import { ModelWorkbench } from './components/ModelWorkbench'
@@ -87,9 +88,12 @@ function TrainingPlatform() {
     <div className="app-shell">
       <div className="sidebar-shell">
         <div className="sidebar-header">
-          <div className="sidebar-brand" title="YOLO 实验平台" aria-label="YOLO 实验平台">
-            <ActivitySquare size={20} />
-            <span>YOLO</span>
+          <div className="sidebar-brand" title="VisionOps 实验平台" aria-label="VisionOps 实验平台">
+            <VisionOpsLogo size={22} />
+            <div className="brand-logotype">
+              <span className="brand-logotype-vision" style={{ fontSize: '0.95rem' }}>Vision</span>
+              <span className="brand-logotype-ops-badge">Ops</span>
+            </div>
           </div>
           <div className="sidebar-primary-actions">
             <button className="btn" style={{ padding: '0.25rem 0.5rem' }} onClick={() => { window.location.hash = '#/' }} title="返回首页">

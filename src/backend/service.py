@@ -27,6 +27,7 @@ from backend.constants import (
     DEFAULT_MAX_PARALLEL_TRAINING_TASKS,
     MAX_PARALLEL_TRAINING_SETTING_KEY,
     MAX_PARALLEL_TRAINING_TASKS_LIMIT,
+    PER_CLASS_METRICS_FILENAME,
     STATE_ANALYZING,
     STATE_CANCELLED,
     STATE_COMPLETED,
@@ -2548,6 +2549,7 @@ class OrchestratorService:
                         self._download_remote_file(sftp, self._remote_join(trial.remote_run_dir, filename), cache_dir / filename)
                     except OSError:
                         pass
+                self._sync_remote_per_class_metrics(client, sftp, server, trial, cache_dir)
         except OSError as exc:
             sync_error = str(exc)
             self.repo.update_trial(
@@ -2676,6 +2678,33 @@ class OrchestratorService:
             "final_metrics": final_metrics,
             "summary_path": summary_path if final_metrics else None,
         }
+
+    def _sync_remote_per_class_metrics(
+        self, client: Any, sftp: Any, server: RemoteServer, trial: TrialRecord, cache_dir: Path,
+    ) -> None:
+        """Download per-class metrics, generating them once for older managed workers."""
+        remote_metrics = self._remote_join(trial.remote_run_dir, PER_CLASS_METRICS_FILENAME)
+        local_metrics = cache_dir / PER_CLASS_METRICS_FILENAME
+        try:
+            self._download_remote_file(sftp, remote_metrics, local_metrics)
+            return
+        except OSError:
+            pass
+
+        remote_worker = self._remote_join(trial.remote_run_dir, "remote_train_worker.py")
+        remote_request = self._remote_join(trial.remote_run_dir, "request.json")
+        worker_path = Path(__file__).resolve().parent / "core" / "remote_train_worker.py"
+        try:
+            self._upload_remote_file(sftp, worker_path, remote_worker)
+            self._exec_remote(
+                client,
+                f"{shlex.quote(server.remote_python)} {shlex.quote(remote_worker)} "
+                f"--metrics {shlex.quote(remote_request)}",
+            )
+            self._download_remote_file(sftp, remote_metrics, local_metrics)
+        except (OSError, ServiceError):
+            # Per-class metrics are optional and must not turn a completed training into a failed sync.
+            return
 
     def compare_experiment(self, experiment_id: str) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)
@@ -2947,12 +2976,27 @@ class OrchestratorService:
 
     def _local_dataset_fingerprint(self, local_root: Path) -> str:
         digest = hashlib.sha256()
-        for path in sorted((item for item in local_root.rglob("*") if item.is_file() and not item.is_symlink()), key=lambda item: item.relative_to(local_root).as_posix()):
+        for path in sorted(
+            (item for item in local_root.rglob("*") if self._is_dataset_source_file(local_root, item)),
+            key=lambda item: item.relative_to(local_root).as_posix(),
+        ):
             digest.update(path.relative_to(local_root).as_posix().encode("utf-8"))
             with path.open("rb") as handle:
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                     digest.update(chunk)
         return digest.hexdigest()
+
+    @staticmethod
+    def _is_dataset_source_file(local_root: Path, path: Path) -> bool:
+        """Exclude generated files that must not invalidate or enter the remote dataset cache."""
+        if not path.is_file() or path.is_symlink():
+            return False
+        relative = path.relative_to(local_root)
+        ignored_directories = {".git", "__pycache__", "predictions_xml"}
+        if any(part.casefold() in ignored_directories for part in relative.parts[:-1]):
+            return False
+        name = relative.name.casefold()
+        return path.suffix.casefold() != ".cache" and name not in {".ds_store", "desktop.ini", "thumbs.db"}
 
     def _refresh_managed_remote_dataset(
         self, sftp: Any, work_root: str, experiment_id: str,
@@ -3012,7 +3056,7 @@ class OrchestratorService:
         """Upload a local dataset tree while preserving its relative layout."""
         self._mkdir_remote(sftp, remote_root)
         for path in local_root.rglob("*"):
-            if not path.is_file() or path.is_symlink():
+            if not self._is_dataset_source_file(local_root, path):
                 continue
             remote_path = self._remote_join(remote_root, path.relative_to(local_root).as_posix())
             self._mkdir_remote(sftp, posixpath.dirname(remote_path))
