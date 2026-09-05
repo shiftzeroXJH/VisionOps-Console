@@ -176,6 +176,8 @@ class Repository:
                 conn.execute("ALTER TABLE remote_servers ADD COLUMN remote_python TEXT NOT NULL DEFAULT ''")
             if "password" not in remote_server_columns:
                 conn.execute("ALTER TABLE remote_servers ADD COLUMN password TEXT NOT NULL DEFAULT ''")
+            if "max_parallel_training_tasks" not in remote_server_columns:
+                conn.execute("ALTER TABLE remote_servers ADD COLUMN max_parallel_training_tasks INTEGER NOT NULL DEFAULT 1")
             if "description" not in columns:
                 conn.execute("ALTER TABLE experiments ADD COLUMN description TEXT NOT NULL DEFAULT ''")
             if "project" not in columns:
@@ -242,6 +244,10 @@ class Repository:
             training_task_defaults = {
                 "parent_trial_id": "TEXT NOT NULL DEFAULT ''",
                 "training_mode": "TEXT NOT NULL DEFAULT 'fresh'",
+                "source": "TEXT NOT NULL DEFAULT 'local'",
+                "remote_server_id": "TEXT NOT NULL DEFAULT ''",
+                "request_snapshot_json": "TEXT NOT NULL DEFAULT '{}'",
+                "phase": "TEXT NOT NULL DEFAULT 'running'",
             }
             for column, definition in training_task_defaults.items():
                 if column not in training_task_columns:
@@ -475,6 +481,10 @@ class Repository:
             finished_at=row["finished_at"],
             parent_trial_id=row["parent_trial_id"],
             training_mode=row["training_mode"],
+            source=row["source"],
+            remote_server_id=row["remote_server_id"],
+            request_snapshot=json.loads(row["request_snapshot_json"]),
+            phase=row["phase"],
         )
 
     def create_training_task(self, task: TrainingTask) -> None:
@@ -484,8 +494,8 @@ class Repository:
                 INSERT INTO training_tasks (
                     queue_id, experiment_id, params_json, pretrained, note, reason,
                     status, position, trial_id, error, created_at, started_at, finished_at,
-                    parent_trial_id, training_mode
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    parent_trial_id, training_mode, source, remote_server_id, request_snapshot_json, phase
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.queue_id,
@@ -503,6 +513,10 @@ class Repository:
                     task.finished_at,
                     task.parent_trial_id,
                     task.training_mode,
+                    task.source,
+                    task.remote_server_id,
+                    json.dumps(task.request_snapshot),
+                    task.phase,
                 ),
             )
 
@@ -537,6 +551,7 @@ class Repository:
         error: str | None = None,
         started_at: str | None = None,
         finished_at: str | None = None,
+        phase: str | None = None,
     ) -> None:
         values_by_column = {
             "status": status,
@@ -545,6 +560,7 @@ class Repository:
             "error": error,
             "started_at": started_at,
             "finished_at": finished_at,
+            "phase": phase,
         }
         assignments: list[str] = []
         values: list[Any] = []
@@ -565,8 +581,13 @@ class Repository:
 
     def reorder_queued_training_task(self, queue_id: str, target_position: int) -> None:
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            target = conn.execute("SELECT source, remote_server_id, status FROM training_tasks WHERE queue_id = ?", (queue_id,)).fetchone()
+            if target is None or target["status"] != "QUEUED":
+                raise KeyError(f"queued training task not found: {queue_id}")
             rows = conn.execute(
-                "SELECT queue_id FROM training_tasks WHERE status = 'QUEUED' ORDER BY position, created_at, queue_id"
+                "SELECT queue_id FROM training_tasks WHERE status = 'QUEUED' AND source = ? AND remote_server_id = ? ORDER BY position, created_at, queue_id",
+                (target["source"], target["remote_server_id"]),
             ).fetchall()
             queue_ids = [str(row["queue_id"]) for row in rows]
             if queue_id not in queue_ids:
@@ -580,12 +601,40 @@ class Repository:
                     (position, current_id),
                 )
 
-    def next_training_task_position(self) -> int:
+    def next_training_task_position(self, source: str = "local", remote_server_id: str = "") -> int:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT COALESCE(MAX(position), 0) + 1 AS next_position FROM training_tasks WHERE status = 'QUEUED'"
+                "SELECT COALESCE(MAX(position), 0) + 1 AS next_position FROM training_tasks WHERE status = 'QUEUED' AND source = ? AND remote_server_id = ?",
+                (source, remote_server_id),
             ).fetchone()
         return int(row["next_position"])
+
+    def claim_training_task(self, queue_id: str, limit: int) -> bool:
+        """Atomically reserve a target's capacity, including preparation time."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = conn.execute("SELECT * FROM training_tasks WHERE queue_id = ?", (queue_id,)).fetchone()
+            if task is None or task["status"] != "QUEUED":
+                return False
+            active = conn.execute(
+                "SELECT experiment_id, phase FROM training_tasks WHERE status = 'RUNNING' AND source = ? AND remote_server_id = ?",
+                (task["source"], task["remote_server_id"]),
+            ).fetchall()
+            if len(active) >= limit or any(row["experiment_id"] == task["experiment_id"] for row in active):
+                return False
+            if task["source"] == "remote" and any(row["phase"] == "unknown" for row in active):
+                return False
+            conn.execute("UPDATE training_tasks SET status = 'RUNNING', phase = ?, started_at = ? WHERE queue_id = ?",
+                         ("preparing" if task["source"] == "remote" else "running", utc_now_iso(), queue_id))
+            return True
+
+    def cancel_queued_training_task(self, queue_id: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE training_tasks SET status = 'CANCELLED', finished_at = ? WHERE queue_id = ? AND status = 'QUEUED'",
+                (utc_now_iso(), queue_id),
+            )
+            return cursor.rowcount == 1
 
     def delete_training_tasks_for_experiment(self, experiment_id: str) -> int:
         with self._connect() as conn:
@@ -664,8 +713,12 @@ class Repository:
     def update_experiment_status(self, experiment_id: str, status: str) -> None:
         with self._connect() as conn:
             conn.execute(
-                "UPDATE experiments SET status = ? WHERE experiment_id = ?",
-                (status, experiment_id),
+                """UPDATE experiments SET status = CASE
+                    WHEN ? = 'CANCELLED' THEN 'CANCELLED'
+                    WHEN EXISTS (SELECT 1 FROM training_tasks WHERE experiment_id = experiments.experiment_id AND status = 'RUNNING') THEN 'TRAINING'
+                    WHEN EXISTS (SELECT 1 FROM training_tasks WHERE experiment_id = experiments.experiment_id AND status = 'QUEUED') THEN 'QUEUED'
+                    ELSE ? END WHERE experiment_id = ?""",
+                (status, status, experiment_id),
             )
 
     def update_experiment(self, experiment_id: str, *, description: str | None = None, project: str | None = None, dataset_root: str | None = None, dataset_yaml: str | None = None, pretrained_model: str | None = None, remote_configs: dict[str, Any] | None = None) -> None:
@@ -958,8 +1011,8 @@ class Repository:
                 """
                 INSERT INTO remote_servers (
                     remote_server_id, name, host, port, username, auth_type,
-                    private_key_path, password_ref, default_runs_root, remote_python, password, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    private_key_path, password_ref, default_runs_root, remote_python, password, created_at, max_parallel_training_tasks
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     server.remote_server_id,
@@ -974,6 +1027,7 @@ class Repository:
                     server.remote_python,
                     server.password,
                     utc_now_iso(),
+                    server.max_parallel_training_tasks,
                 ),
             )
 
@@ -995,6 +1049,7 @@ class Repository:
                 default_runs_root=row["default_runs_root"],
                 remote_python=row["remote_python"],
                 password=row["password"],
+                max_parallel_training_tasks=int(row["max_parallel_training_tasks"]),
             )
             for row in rows
         ]
@@ -1019,10 +1074,11 @@ class Repository:
             default_runs_root=row["default_runs_root"],
             remote_python=row["remote_python"],
             password=row["password"],
+            max_parallel_training_tasks=int(row["max_parallel_training_tasks"]),
         )
 
     def update_remote_server(self, remote_server_id: str, **fields: Any) -> None:
-        allowed = {"name", "host", "port", "username", "remote_python", "default_runs_root", "password"}
+        allowed = {"name", "host", "port", "username", "remote_python", "default_runs_root", "password", "max_parallel_training_tasks"}
         assignments = [f"{key} = ?" for key in fields if key in allowed]
         values = [fields[key] for key in fields if key in allowed]
         if not assignments:

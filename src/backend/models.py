@@ -74,6 +74,10 @@ class TrainingTask:
     finished_at: str = ""
     parent_trial_id: str = ""
     training_mode: str = "fresh"
+    source: str = "local"
+    remote_server_id: str = ""
+    request_snapshot: dict[str, Any] = field(default_factory=dict)
+    phase: str = "running"
 
 
 @dataclass
@@ -100,6 +104,7 @@ class RemoteServer:
     default_runs_root: str = ""
     remote_python: str = ""
     password: str = ""
+    max_parallel_training_tasks: int = 1
 
 
 @dataclass

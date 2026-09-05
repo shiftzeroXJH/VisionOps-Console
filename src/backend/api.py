@@ -23,7 +23,10 @@ training_queue = TrainingQueue(service)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     training_queue.start()
-    yield
+    try:
+        yield
+    finally:
+        training_queue.stop()
 
 
 app = FastAPI(title="yolo-platform", version="0.1.0", lifespan=lifespan)
@@ -230,6 +233,11 @@ def cancel_training_task(queue_id: str) -> dict[str, Any]:
     return _invoke_sync("cancel-training-task", lambda: training_queue.cancel(queue_id))
 
 
+@app.post("/api/training-tasks/{queue_id}/recheck")
+def recheck_training_task(queue_id: str) -> dict[str, Any]:
+    return _invoke_sync("recheck-training-task", lambda: training_queue.recheck(queue_id))
+
+
 @app.patch("/api/training-tasks/{queue_id}")
 def reorder_training_task(queue_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     body = dict(payload)
@@ -265,6 +273,7 @@ def create_remote_server(payload: dict[str, Any]) -> dict[str, Any]:
             default_runs_root=body.get("default_runs_root"),
             remote_python=body.get("remote_python"),
             password=body.get("password"),
+            max_parallel_training_tasks=body.get("max_parallel_training_tasks", 1),
         ),
     )
 
@@ -274,10 +283,17 @@ def test_remote_server(remote_server_id: str) -> dict[str, Any]:
     return _invoke_sync("test-remote-server", lambda: service.test_remote_server(remote_server_id))
 
 
+@app.get("/api/remote-servers/{remote_server_id}/gpu-status")
+def get_remote_gpu_status(remote_server_id: str) -> dict[str, Any]:
+    return _invoke_sync("remote-gpu-status", lambda: service.get_remote_gpu_status(remote_server_id))
+
+
 @app.patch("/api/remote-servers/{remote_server_id}")
 def update_remote_server(remote_server_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     body = dict(payload or {})
-    return _invoke_sync("update-remote-server", lambda: service.update_remote_server(remote_server_id, **body))
+    result = _invoke_sync("update-remote-server", lambda: service.update_remote_server(remote_server_id, **body))
+    training_queue.notify_settings_changed()
+    return result
 
 
 @app.post("/api/experiments")
@@ -421,12 +437,13 @@ def run_remote_experiment_trial(experiment_id: str, payload: dict[str, Any] | No
     body = dict(payload or {})
     return _invoke_sync(
         "run-remote-experiment-trial",
-        lambda: service.launch_remote_trial(
+        lambda: training_queue.submit_remote(
             experiment_id,
             remote_server_id=body["remote_server_id"],
             params=body.get("params"),
             pretrained=body.get("pretrained") or body.get("model"),
             note=body.get("note"),
+            idempotency_key=body.get("idempotency_key"),
         ),
     )
 
@@ -449,7 +466,7 @@ def import_experiment_trial(experiment_id: str, payload: dict[str, Any]) -> dict
 @app.post("/api/experiments/{experiment_id}/trials/remote-register")
 def register_remote_trial(experiment_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     body = dict(payload)
-    return _invoke_sync(
+    result = _invoke_sync(
         "register-remote-trial",
         lambda: service.register_remote_trial(
             experiment_id,
@@ -458,12 +475,14 @@ def register_remote_trial(experiment_id: str, payload: dict[str, Any]) -> dict[s
             note=body.get("note"),
         ),
     )
+    training_queue.track_registered_remote_trials()
+    return result
 
 
 @app.post("/api/experiments/{experiment_id}/trials/import-remote")
 def import_remote_trial(experiment_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     body = dict(payload)
-    return _invoke_sync(
+    result = _invoke_sync(
         "import-remote-trial",
         lambda: service.import_remote_run(
             experiment_id,
@@ -472,6 +491,8 @@ def import_remote_trial(experiment_id: str, payload: dict[str, Any]) -> dict[str
             note=body.get("note"),
         ),
     )
+    training_queue.track_registered_remote_trials()
+    return result
 
 
 @app.get("/api/trials/{trial_id}/summary")

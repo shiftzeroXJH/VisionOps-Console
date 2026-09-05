@@ -1,3 +1,15 @@
+export type RemoteGpuStatus = {
+  remote_server_id: string;
+  status: 'ok' | 'unavailable';
+  captured_at: string | null;
+  error: string;
+  gpu_name?: string;
+  memory_used_mib?: number;
+  memory_free_mib?: number;
+  memory_total_mib?: number;
+  memory_used_percent?: number;
+};
+
 export type Experiment = {
   experiment_id: string;
   description: string;
@@ -27,6 +39,12 @@ export type Experiment = {
 };
 
 export type TrainingTask = {
+  source?: 'local' | 'remote';
+  remote_server_id?: string | null;
+  phase?: 'preparing' | 'running' | 'unknown';
+  waiting_reason?: string | null;
+  error?: string | null;
+  last_synced_epoch_count?: number | null;
   queue_id: string;
   experiment_id: string;
   experiment_name: string;
@@ -34,7 +52,7 @@ export type TrainingTask = {
   task_type: string;
   model: string;
   params: Record<string, unknown>;
-  status: 'RUNNING' | 'QUEUED';
+  status: 'RUNNING' | 'QUEUED' | 'FAILED' | 'CANCELLED' | 'COMPLETED';
   position: number;
   trial_id?: string;
   created_at: string;
@@ -44,7 +62,24 @@ export type TrainingTask = {
   training_mode?: 'fresh' | 'continued';
 };
 
+export type TrainingTaskGroup = {
+  target_id: string;
+  name: string;
+  source: 'local' | 'remote';
+  remote_server_id: string | null;
+  max_parallel_training_tasks: number;
+  running_count: number;
+  queued_count: number;
+  running: TrainingTask[];
+  queued: TrainingTask[];
+  blocked: boolean;
+  last_failure: TrainingTask | null;
+};
+
 export type TrainingTaskList = {
+  groups?: TrainingTaskGroup[];
+  total_running_count?: number;
+  total_queued_count?: number;
   max_parallel_training_tasks: number;
   running_count: number;
   queued_count: number;
@@ -186,6 +221,12 @@ export const api = {
     return res.json();
   },
 
+  async getRemoteGpuStatus(remoteServerId: string, signal?: AbortSignal): Promise<RemoteGpuStatus> {
+    const res = await fetch(`/api/remote-servers/${encodeURIComponent(remoteServerId)}/gpu-status`, { signal, cache: 'no-store' });
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
   async getRemoteServers() {
     const res = await fetch('/api/remote-servers');
     if (!res.ok) await safeThrowError(res);
@@ -202,7 +243,9 @@ export const api = {
     return res.json();
   },
 
-  async runRemoteTrial(experimentId: string, payload: any) {
+  async runRemoteTrial(experimentId: string, payload: {
+    remote_server_id: string; params: Record<string, unknown>; pretrained: string; note: string; idempotency_key: string;
+  }): Promise<{ disposition: 'started' | 'queued'; training_task: TrainingTask }> {
     const res = await fetch(`/api/experiments/${experimentId}/trials/remote-run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -302,6 +345,12 @@ export const api = {
 
   async getTrainingTasks(): Promise<TrainingTaskList> {
     const res = await fetch('/api/training-tasks');
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async recheckTrainingTask(queueId: string) {
+    const res = await fetch(`/api/training-tasks/${encodeURIComponent(queueId)}/recheck`, { method: 'POST' });
     if (!res.ok) await safeThrowError(res);
     return res.json();
   },

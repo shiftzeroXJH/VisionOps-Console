@@ -287,6 +287,13 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
 
                 <section className="flex-col gap-2">
                   <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>数据集分析</h3>
+                  {isRemote && !datasetAnalysis.totals && (
+                    <div className="text-muted">此任务未保存训练时的数据集统计快照，刷新不会使用当前数据集补算历史统计。</div>
+                  )}
+                  {isRemote && datasetAnalysis.totals && (
+                    <div className="text-muted">已保存的数据集统计快照，刷新远程数据不会重新计算。</div>
+                  )}
+                  {datasetAnalysis.totals && (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
                     <div className="card p-2 text-center" style={{ padding: '0.75rem' }}>
                       <div className="text-muted" style={{ fontSize: '0.75rem' }}>Train 实例数</div>
@@ -310,6 +317,7 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                       </div>
                     </div>
                   </div>
+                  )}
                   {datasetAnalysis.dataset_yaml && (
                     <div className="text-muted" style={{ fontSize: '0.75rem', wordBreak: 'break-all' }}>
                       数据集配置: {datasetAnalysis.dataset_yaml}

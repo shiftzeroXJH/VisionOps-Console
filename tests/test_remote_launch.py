@@ -30,6 +30,8 @@ class _Client:
             return None, _Stream("", 0), _Stream()
         if command.startswith("find "):
             return None, _Stream("/remote/data/data.yaml\n"), _Stream()
+        if "print(json.dumps(analyze_dataset(" in command:
+            return None, _Stream('{"totals":{"total_instances":7},"splits":{},"classes":[]}'), _Stream()
         return None, _Stream(), _Stream()
 
     def close(self) -> None:
@@ -40,6 +42,7 @@ class _Sftp:
     def __init__(self) -> None:
         self.paths = {"/"}
         self.uploads: list[tuple[str, str]] = []
+        self.texts: dict[str, str] = {}
 
     def stat(self, path: str):
         if path not in self.paths:
@@ -52,6 +55,20 @@ class _Sftp:
     def put(self, local: str, remote: str) -> None:
         self.uploads.append((local, remote))
         self.paths.add(remote)
+
+    def open(self, path: str, mode: str = "r"):
+        from io import StringIO
+        sftp = self
+        if "r" in mode:
+            if path not in getattr(self, "texts", {}):
+                raise OSError(path)
+            return StringIO(self.texts[path])
+        class _Writer(StringIO):
+            def close(self_inner):
+                sftp.texts[path] = self_inner.getvalue()
+                sftp.paths.add(path)
+                super().close()
+        return _Writer()
 
     def close(self) -> None:
         pass
@@ -96,7 +113,49 @@ def test_launch_remote_trial_uploads_worker_and_persists_trial(tmp_path: Path, m
 
     assert result["status"] == "TRAINING"
     trial = service.repo.get_trial(result["trial_id"])
+    assert trial.dataset_analysis["source"] == "remote"
+    assert trial.dataset_analysis["totals"]["total_instances"] == 7
+    assert trial.dataset_analysis["captured_at"]
+    analysis_index = next(i for i, command in enumerate(client.commands) if "print(json.dumps(analyze_dataset(" in command)
+    launch_index = next(i for i, command in enumerate(client.commands) if "nohup" in command)
+    assert analysis_index < launch_index
     assert trial.remote_run_dir == f"/remote/runs/experiments/{experiment_id}/{result['trial_id']}"
     uploaded_names = {Path(remote).name for _local, remote in sftp.uploads}
     assert {"request.json", "remote_train_worker.py", "yolo26n.pt"} <= uploaded_names
     assert any("remote_train_worker.py" in command and "nohup" in command for command in client.commands)
+
+
+def test_launch_remote_trial_uploads_local_dataset_when_remote_paths_blank(tmp_path: Path, monkeypatch) -> None:
+    dataset = tmp_path / "local_dataset"
+    (dataset / "images" / "train").mkdir(parents=True)
+    (dataset / "images" / "train" / "sample.jpg").write_bytes(b"jpg")
+    (dataset / "data.yaml").write_text("path: .\ntrain: images/train\nval: images/val\nnames: [part]\n", encoding="utf-8")
+    service = OrchestratorService(db_path=tmp_path / "state.sqlite")
+    experiment_id = "exp_upload"
+    service.repo.create_experiment(ExperimentConfig(
+        experiment_id=experiment_id, description="upload", project="re", task_type="obb",
+        dataset_root=str(dataset), dataset_yaml=str(dataset / "data.yaml"), pretrained_model=str(tmp_path / "local.pt"),
+        save_root=str(tmp_path / "runs"), status=STATE_READY, initial_params=dict(TASK_BASELINES["obb"]),
+        search_space=SEARCH_SPACE, stop_conditions=STOP_CONDITIONS,
+        remote_configs={"remote_001": {"pretrained_model": "/remote/model.pt"}},
+    ))
+    service.repo.create_remote_server(RemoteServer(
+        remote_server_id="remote_001", name="test", host="host", port=22, username="user", auth_type="password",
+        default_runs_root="/remote/runs", remote_python="/opt/python", password="secret",
+    ))
+    client, sftp = _Client(), _Sftp()
+    monkeypatch.setattr(service, "_open_sftp", lambda _server: (client, sftp))
+
+    result = service.launch_remote_trial(experiment_id, remote_server_id="remote_001")
+
+    remote_dir = result["remote_run_dir"]
+    uploaded = {remote: local for local, remote in sftp.uploads}
+    experiment_dir = str(Path(remote_dir).parent).replace("\\", "/")
+    assert f"{experiment_dir}/dataset/images/train/sample.jpg" in uploaded
+    assert f"{experiment_dir}/data.remote.yaml" in uploaded
+    request = Path(uploaded[f"{remote_dir}/request.json"]).read_text(encoding="utf-8")
+    assert f"{experiment_dir}/data.remote.yaml" in request
+    first_dataset_uploads = [remote for _local, remote in sftp.uploads if f"{experiment_dir}/dataset/" in remote]
+    service.launch_remote_trial(experiment_id, remote_server_id="remote_001")
+    second_dataset_uploads = [remote for _local, remote in sftp.uploads if f"{experiment_dir}/dataset/" in remote]
+    assert second_dataset_uploads == first_dataset_uploads

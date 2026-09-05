@@ -1217,7 +1217,10 @@ tr:hover td {
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
-  max-height: calc(100% - 78px);
+  width: 560px;
+  max-width: calc(100vw - 1.5rem);
+  max-height: 33.333dvh;
+  box-sizing: border-box;
   padding: 0.75rem;
   overflow: hidden;
   border: 1px solid #cbd5e1;
@@ -1260,8 +1263,8 @@ tr:hover td {
   min-height: 0;
 }
 
-.training-task-section:last-child {
-  overflow-y: auto;
+.training-task-section {
+  flex-shrink: 0;
 }
 
 .training-task-section h3 {
@@ -1571,3 +1574,12 @@ tr:hover td {
     transform: none;
   }
 }
+
+.training-task-popover-title { flex-shrink: 0; flex-wrap: wrap; }
+.training-task-totals { margin-left: auto; font-size: 0.78rem; }
+.training-task-group-toggle { display: flex; align-items: center; gap: 0.4rem; width: 100%; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.training-task-group-toggle strong { min-width: 0; overflow-wrap: anywhere; }
+.training-task-group-toggle span { margin-left: auto; flex-shrink: 0; font-size: 0.78rem; }
+.training-task-detail { grid-column: 1 / -1; font-size: 0.78rem; overflow-wrap: anywhere; white-space: normal; }
+.training-task-state.preparing, .training-task-state.unknown { color: var(--warning-color); }
+.training-task-failure { padding: 0.5rem; color: var(--danger-color); font-size: 0.8rem; overflow-wrap: anywhere; }

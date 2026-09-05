@@ -157,6 +157,12 @@ ONNX 默认导出到项目工作目录下的 `exports/`。通过仓库中的启�
 
 全局设置中的“最大并行模型训练任务”默认是 `1`，可设置为 `1–64`。该限制只统计平台启动的本地调参训练；等待队列保存在 SQLite 中，后端重启后会继续调度。
 
+每台远程服务器拥有独立的训练队列，可在服务器设置中调整并发上限（默认 `1`，范围 `1–64`）。同一服务器内的同一实验始终串行，其他实验可使用剩余名额。左上角“模型训练列表”按本地和服务器分组，支持查看状态、组内调整顺序和取消等待任务；浮层最高占网页可视高度的三分之一，超出后滚动。
+
+远程任务提交时保存参数、模型及数据集路径，轮到执行时才读取路径下的最新数据并上传、生成训练前统计快照。刷新远程结果不会重算历史统计。平台后端每 30 秒核对远程进程，确认完成或失败后启动下一项；关闭网页不影响调度，停止后端会暂停后续派发但不终止远程进程。重新启动后端后先核对状态，连接失败或启动结果不明时保留名额，列表中可点击“重新检查”。只有平台登记的远程训练会占用队列名额，显存监控不作为自动调度条件。
+
+远程执行器面向 Linux 单 GPU（GPU 0），使用进程锁和启动标识防止同一 Trial 重复运行。平台后端应以单进程运行；队列恢复会接管该数据库中的任务。旧版或外部导入任务缺少可核实的进程信息时会显示状态待确认，而不会擅自释放名额。
+
 ## API
 
 主要接口：
@@ -172,6 +178,9 @@ POST   /api/experiments/{experiment_id}/trials/run
 GET    /api/training-tasks
 PATCH  /api/training-tasks/{queue_id}
 POST   /api/training-tasks/{queue_id}/cancel
+POST   /api/training-tasks/{queue_id}/recheck
+POST   /api/experiments/{experiment_id}/trials/remote-run
+GET    /api/remote-servers/{remote_server_id}/gpu-status
 POST   /api/experiments/{experiment_id}/trials/import
 GET    /api/experiments/{experiment_id}/comparison
 GET    /api/experiments/{experiment_id}/curves

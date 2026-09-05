@@ -95,14 +95,15 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
   const experimentIdRef = useRef(experimentId)
   experimentIdRef.current = experimentId
 
-  const loadData = useCallback(async () => {
-    setLoading(true)
+  const refreshData = useCallback(async (background = false, isCurrent: () => boolean = () => true) => {
+    if (!background) setLoading(true)
     try {
       const [det, comp, curvesData] = await Promise.all([
         api.getExperiment(experimentIdRef.current),
         api.getComparison(experimentIdRef.current),
         api.getExperimentCurves(experimentIdRef.current).catch(() => null),
       ])
+      if (!isCurrent()) return
       setDetail(det)
       setComparison(comp)
       
@@ -142,9 +143,11 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
         setCurveFitnessMetric('')
       }
     } finally {
-      setLoading(false)
+      if (!background) setLoading(false)
     }
   }, [])
+
+  const loadData = useCallback(() => refreshData(), [refreshData])
 
   useEffect(() => {
     experimentIdRef.current = experimentId
@@ -154,13 +157,28 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
   }, [experimentId, loadData])
 
   useEffect(() => {
+    if (showParameterDrawer) return undefined
     const remoteTrials = (detail?.trials || []).filter((trial: any) => trial.remote_server_id && ['TRAINING', 'RETRAINING'].includes(trial.internal_status))
     if (remoteTrials.length === 0) return undefined
-    const timer = window.setInterval(() => {
-      Promise.all(remoteTrials.map((trial: any) => api.syncRemoteTrial(trial.trial_id).catch(() => null))).then(() => loadData())
+    let cancelled = false
+    let refreshing = false
+    const timer = window.setInterval(async () => {
+      if (refreshing || cancelled) return
+      refreshing = true
+      try {
+        await Promise.all(remoteTrials.map((trial: any) => api.syncRemoteTrial(trial.trial_id).catch(() => null)))
+        if (!cancelled) await refreshData(true, () => !cancelled)
+      } catch (err) {
+        console.error('Error refreshing remote trials:', err)
+      } finally {
+        refreshing = false
+      }
     }, 30000)
-    return () => window.clearInterval(timer)
-  }, [detail?.trials, loadData])
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [detail?.trials, experimentId, showParameterDrawer, refreshData])
 
   const handleDeleteTrial = async (trialId: string, keepFiles: boolean) => {
     try {

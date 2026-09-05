@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import posixpath
@@ -10,9 +11,15 @@ import shutil
 import stat
 import sys
 import shlex
+import threading
 from pathlib import Path, PureWindowsPath
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - supplied by ultralytics runtime
+    yaml = None
 
 from backend.constants import (
     EXPERIMENT_FILENAME,
@@ -55,6 +62,9 @@ from backend.db.repository import Repository, default_project_name
 from backend.models import ExperimentConfig, HyperparameterTemplate, RemoteServer, TrialRecord
 from backend.utils import ensure_dir, read_json, utc_now_iso, write_json
 from backend.workbench import WorkbenchService
+
+
+_REMOTE_TRIAL_PREPARATION_LOCK = threading.RLock()
 
 
 class ServiceError(RuntimeError):
@@ -654,6 +664,12 @@ class OrchestratorService:
             "results": results,
         }
 
+    @staticmethod
+    def _validate_remote_parallel(value: Any) -> int:
+        if isinstance(value, bool) or not re.fullmatch(r"[0-9]+", str(value)) or not 1 <= int(value) <= 64:
+            raise ServiceError("max_parallel_training_tasks must be an integer between 1 and 64")
+        return int(value)
+
     def list_remote_servers(self) -> dict[str, Any]:
         return {
             "remote_servers": [
@@ -668,6 +684,7 @@ class OrchestratorService:
                     "password_ref": server.password_ref,
                     "default_runs_root": server.default_runs_root,
                     "remote_python": server.remote_python,
+                    "max_parallel_training_tasks": server.max_parallel_training_tasks,
                 }
                 for server in self.repo.list_remote_servers()
             ]
@@ -686,6 +703,7 @@ class OrchestratorService:
         default_runs_root: str | None = None,
         remote_python: str | None = None,
         password: str | None = None,
+        max_parallel_training_tasks: int = 1,
     ) -> dict[str, Any]:
         normalized_auth_type = auth_type.strip().lower()
         if normalized_auth_type not in {"key", "password"}:
@@ -714,6 +732,7 @@ class OrchestratorService:
             default_runs_root=(default_runs_root or "").strip(),
             remote_python=(remote_python or "").strip(),
             password=(password or "").strip(),
+            max_parallel_training_tasks=self._validate_remote_parallel(max_parallel_training_tasks),
         )
         if not server.host:
             raise ServiceError("host is required")
@@ -728,6 +747,7 @@ class OrchestratorService:
         server = self.repo.get_remote_server(remote_server_id)
         client, sftp = self._open_sftp(server)
         try:
+            python_info = self._check_remote_python(client, server.remote_python)
             root = server.default_runs_root or "."
             try:
                 sftp.stat(root)
@@ -739,10 +759,33 @@ class OrchestratorService:
                 "status": "ok",
                 "default_runs_root": root,
                 "default_runs_root_exists": root_exists,
+                "python": python_info,
             }
         finally:
             sftp.close()
             client.close()
+
+    def get_remote_gpu_status(self, remote_server_id: str) -> dict[str, Any]:
+        from backend.core.gpu_monitor import query_gpu
+
+        server = self.repo.get_remote_server(remote_server_id)
+        client = None
+        result: dict[str, Any] = {"remote_server_id": remote_server_id, "status": "unavailable",
+                                  "captured_at": None, "error": ""}
+        try:
+            client = self._open_ssh(server, timeout=5)
+            result.update(query_gpu(client))
+            result.update(status="ok", captured_at=utc_now_iso())
+        except TimeoutError:
+            result["error"] = "服务器显存查询超时"
+        except ValueError as exc:
+            result["error"] = str(exc)
+        except Exception:
+            result["error"] = "无法连接服务器或读取显存，请检查连接和认证配置"
+        finally:
+            if client is not None:
+                client.close()
+        return result
 
     def update_remote_server(self, remote_server_id: str, **fields: Any) -> dict[str, Any]:
         current = self.repo.get_remote_server(remote_server_id)
@@ -757,6 +800,8 @@ class OrchestratorService:
             values.pop("password")
         if "port" in fields:
             values["port"] = int(fields["port"])
+        if "max_parallel_training_tasks" in fields and fields["max_parallel_training_tasks"] is not None:
+            values["max_parallel_training_tasks"] = self._validate_remote_parallel(fields["max_parallel_training_tasks"])
         self.repo.update_remote_server(remote_server_id, **values)
         updated = self.repo.get_remote_server(remote_server_id)
         payload = dict(updated.__dict__)
@@ -987,10 +1032,9 @@ class OrchestratorService:
             "work_root": server.default_runs_root,
         }
 
-    def launch_remote_trial(
+    def prepare_remote_trial_request(
         self,
         experiment_id: str,
-        *,
         remote_server_id: str,
         params: dict[str, Any] | None = None,
         pretrained: str | None = None,
@@ -1001,30 +1045,149 @@ class OrchestratorService:
         remote_cfg = config.remote_configs.get(remote_server_id, {})
         dataset_root = str(remote_cfg.get("dataset_root", "")).strip()
         dataset_yaml = str(remote_cfg.get("dataset_yaml", "")).strip()
+        upload_local_dataset = not dataset_root and not dataset_yaml
+        local_dataset_root = Path(str(config.dataset_root)).expanduser() if config.dataset_root else None
+        local_dataset_yaml = Path(str(config.dataset_yaml)).expanduser() if config.dataset_yaml else None
+        if upload_local_dataset:
+            if local_dataset_root is None:
+                if local_dataset_yaml is not None:
+                    local_dataset_root = local_dataset_yaml.parent
+                else:
+                    raise ServiceError("local dataset directory is required when remote dataset paths are blank")
+            if not local_dataset_root.is_dir():
+                raise ServiceError(f"local dataset directory not found: {local_dataset_root}")
+            if local_dataset_yaml is None:
+                candidates = [local_dataset_root / name for name in ("data.yaml", "dataset.yaml", "detect.yaml")]
+                found = [path for path in candidates if path.is_file()]
+                if len(found) != 1:
+                    raise ServiceError(f"local dataset YAML candidates: {len(found)}")
+                local_dataset_yaml = found[0]
+            elif not local_dataset_yaml.is_file():
+                raise ServiceError(f"local dataset YAML not found: {local_dataset_yaml}")
         remote_model = str(remote_cfg.get("pretrained_model", "")).strip() or str(pretrained or "").strip()
         remote_python = server.remote_python.strip()
         work_root = server.default_runs_root.strip()
         if not remote_python or not work_root:
             raise ServiceError("remote server requires remote_python and default_runs_root")
-        if not dataset_root and not dataset_yaml:
-            raise ServiceError("remote dataset path is not configured for this task")
         if not remote_model:
             raise ServiceError("remote model path is not configured for this task")
-        validation = self.validate_params(experiment_id, params=params or config.initial_params)
+        validation = self.validate_params(experiment_id, params=params if params is not None else config.initial_params)
         if not validation["valid"]:
             raise ServiceError(f"invalid trial params: {validation['errors']}")
 
+        if not str(config.save_root).strip():
+            raise ServiceError("save_root is required")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", experiment_id):
+            raise ServiceError("unsafe remote experiment identifier")
+        if Path(config.save_root).expanduser().is_file():
+            raise ServiceError("save_root must be a directory")
+        for value in (dataset_root, dataset_yaml, remote_model, remote_python, work_root, str(config.save_root), str(pretrained or config.pretrained_model)):
+            if "\x00" in value or "\n" in value or "\r" in value:
+                raise ServiceError("paths must not contain NUL or newlines")
+        snapshot = {
+            "version": 1, "experiment_id": experiment_id, "remote_server_id": remote_server_id,
+            "dataset_root": dataset_root, "dataset_yaml": dataset_yaml,
+            "upload_local_dataset": upload_local_dataset,
+            "local_dataset_root": str(local_dataset_root.resolve()) if local_dataset_root else "",
+            "local_dataset_yaml": str(local_dataset_yaml.resolve()) if local_dataset_yaml else "",
+            "remote_model": remote_model, "pretrained": str(pretrained or config.pretrained_model),
+            "remote_python": remote_python, "default_runs_root": work_root,
+            "save_root": str(Path(config.save_root).expanduser().resolve()),
+            "task_type": config.task_type, "params": validation["normalized_params"],
+            "note": (note or "").strip(),
+        }
+        return json.loads(json.dumps(snapshot, allow_nan=False))
+
+    def launch_remote_trial(
+        self, experiment_id: str, *, remote_server_id: str,
+        params: dict[str, Any] | None = None, pretrained: str | None = None,
+        note: str | None = None, prepared_request: dict[str, Any] | None = None,
+        trial_id: str | None = None,
+        on_trial_prepared: Callable[[str], None] | None = None,
+        on_launch_attempt: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
+        # A prepared request is immutable execution input; only authentication is refreshed.
+        snapshot = json.loads(json.dumps(prepared_request)) if prepared_request is not None else self.prepare_remote_trial_request(
+            experiment_id, remote_server_id, params, pretrained, note)
+        if (snapshot.get("version") != 1 or snapshot.get("experiment_id") != experiment_id
+                or snapshot.get("remote_server_id") != remote_server_id):
+            raise ServiceError("remote request snapshot identity/version mismatch")
+        server = self.repo.get_remote_server(remote_server_id)
+        dataset_root, dataset_yaml = snapshot["dataset_root"], snapshot["dataset_yaml"]
+        upload_local_dataset = snapshot["upload_local_dataset"]
+        local_dataset_root = Path(snapshot["local_dataset_root"])
+        local_dataset_yaml = Path(snapshot["local_dataset_yaml"])
+        remote_model = snapshot["remote_model"]
+        remote_python, work_root = snapshot["remote_python"], snapshot["default_runs_root"]
+        validation = {"normalized_params": snapshot["params"]}
+        trial_id = trial_id or self.repo.next_trial_id()
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", trial_id) or not re.fullmatch(r"[A-Za-z0-9_-]+", experiment_id):
+            raise ServiceError("unsafe remote trial/experiment identifier")
+        with _REMOTE_TRIAL_PREPARATION_LOCK:
+            existing_trial = next((item for item in self.repo.list_trials(experiment_id) if item.trial_id == trial_id), None)
+            display_name = existing_trial.display_name if existing_trial else self._next_trial_display_name(experiment_id, remote_model, validation["normalized_params"])
+            remote_dir = posixpath.join(work_root.rstrip("/"), "experiments", experiment_id, trial_id)
+            local_dir = ensure_dir(Path(existing_trial.run_dir) if existing_trial else Path(snapshot["save_root"]) / "experiments" / experiment_id / display_name)
+            trial = TrialRecord(
+                trial_id=trial_id,
+                display_name=display_name,
+                experiment_id=experiment_id,
+                iteration=self._next_iteration(self.repo.list_trials(experiment_id)),
+                params=validation["normalized_params"],
+                status=STATE_TRAINING,
+                run_dir=str(local_dir),
+                source=REMOTE_SOURCE,
+                note=snapshot["note"],
+                model=remote_model,
+                model_source="remote_config",
+                params_source="manual",
+                remote_server_id=remote_server_id,
+                remote_run_dir=remote_dir,
+                sync_status=REMOTE_SYNC_PENDING,
+                remote_training_status=REMOTE_TRAINING_UNKNOWN,
+                dataset_analysis={},
+            )
+            if existing_trial is not None:
+                if (existing_trial.remote_server_id != remote_server_id or existing_trial.remote_run_dir != remote_dir
+                        or existing_trial.params != snapshot["params"]):
+                    raise ServiceError("prepared trial identity/config mismatch")
+                trial = existing_trial
+                display_name = trial.display_name
+                local_dir = Path(trial.run_dir)
+            else:
+                self.repo.create_trial(trial)
+            if (local_dir / "launch_attempt.json").exists():
+                raise ServiceError("trial already has a launch attempt; check status instead of relaunching")
+            write_json(local_dir / "prepared_request.json", snapshot)
+        if on_trial_prepared:
+            on_trial_prepared(trial_id)
         client, sftp = self._open_sftp(server)
-        trial_id = self.repo.next_trial_id()
-        display_name = self._next_trial_display_name(experiment_id, remote_model, validation["normalized_params"])
-        remote_dir = posixpath.join(work_root.rstrip("/"), "experiments", experiment_id, trial_id)
-        local_dir = ensure_dir(Path(config.save_root) / "experiments" / experiment_id / display_name)
         try:
-            dataset_yaml = self._resolve_remote_dataset_yaml(client, dataset_root, dataset_yaml)
-            self._exec_remote(client, f"test -x {shlex.quote(remote_python)}")
+            if upload_local_dataset:
+                remote_experiment_dir = posixpath.dirname(remote_dir)
+                remote_dataset_root = self._remote_join(remote_experiment_dir, "dataset")
+                remote_manifest = self._remote_join(remote_experiment_dir, "dataset.manifest.json")
+                dataset_fingerprint = hashlib.sha256(
+                    (self._local_dataset_fingerprint(local_dataset_root) + "\n").encode()
+                    + local_dataset_yaml.read_bytes()).hexdigest()
+                previous_fingerprint = self._remote_text(sftp, remote_manifest)
+                if previous_fingerprint != dataset_fingerprint:
+                    if previous_fingerprint:
+                        self._refresh_managed_remote_dataset(
+                            sftp, work_root, experiment_id, remote_dataset_root, previous_fingerprint)
+                    self._upload_local_dataset(sftp, local_dataset_root, local_dataset_yaml, remote_dataset_root)
+                    self._mkdir_remote(sftp, remote_experiment_dir)
+                    remote_yaml_local = local_dir / "data.remote.yaml"
+                    self._write_remote_dataset_yaml(remote_yaml_local, local_dataset_yaml, local_dataset_root, remote_dataset_root)
+                    self._upload_remote_file(sftp, remote_yaml_local, self._remote_join(remote_experiment_dir, "data.remote.yaml"))
+                    self._upload_remote_text(sftp, dataset_fingerprint, remote_manifest)
+                dataset_yaml = self._remote_join(remote_experiment_dir, "data.remote.yaml")
+            else:
+                dataset_yaml = self._resolve_remote_dataset_yaml(client, dataset_root, dataset_yaml)
+            self._check_remote_python(client, remote_python)
             self._exec_remote(client, f"test -r {shlex.quote(dataset_yaml)}")
             remote_model_path = remote_model
-            model_check = self._exec_remote(client, f"test -r {shlex.quote(remote_model)}", check=False)
+            model_check = self._exec_remote(client, f"test -r {shlex.quote(remote_model)} || echo missing", check=False).strip()
             amp_source = Path(__file__).resolve().parent / "models" / "yolo26n.pt"
             if not amp_source.exists():
                 amp_source = Path(__file__).resolve().parent / "models" / "yolo26n.pt"
@@ -1034,7 +1197,8 @@ class OrchestratorService:
                 "pretrained_model": remote_model_path,
                 "run_dir": remote_dir,
                 "params": validation["normalized_params"],
-                "task_type": config.task_type,
+                "task_type": snapshot["task_type"],
+                "trial_id": trial_id,
             }
             request_path = local_dir / "request.json"
             write_json(request_path, request)
@@ -1043,51 +1207,79 @@ class OrchestratorService:
             self._upload_remote_file(sftp, worker_path, self._remote_join(remote_dir, "remote_train_worker.py"))
             if amp_source.exists():
                 self._upload_remote_file(sftp, amp_source, self._remote_join(remote_dir, "yolo26n.pt"))
-            if model_check != 0:
-                local_model = _resolve_pretrained_model(pretrained or config.pretrained_model)
+            if model_check == "missing":
+                local_model = _resolve_pretrained_model(snapshot["pretrained"])
                 fallback_remote = self._remote_join(remote_dir, "pretrained_model" + Path(local_model).suffix)
                 self._upload_remote_file(sftp, Path(local_model), fallback_remote)
                 request["pretrained_model"] = fallback_remote
                 write_json(request_path, request)
                 self._upload_remote_file(sftp, request_path, self._remote_join(remote_dir, "request.json"))
+            dataset_analysis = self._analyze_remote_dataset(client, remote_python, dataset_yaml, remote_dir)
+            self.repo.update_trial(trial_id, dataset_analysis=dataset_analysis)
             command = (
                 f"nohup {shlex.quote(remote_python)} {shlex.quote(self._remote_join(remote_dir, 'remote_train_worker.py'))} "
                 f"{shlex.quote(self._remote_join(remote_dir, 'request.json'))} > {shlex.quote(self._remote_join(remote_dir, 'stdout.log'))} "
                 f"2> {shlex.quote(self._remote_join(remote_dir, 'stderr.log'))} < /dev/null & echo $! > {shlex.quote(self._remote_join(remote_dir, 'pid'))}"
             )
+            if on_launch_attempt:
+                on_launch_attempt()
+            # Exclusive durable local marker also protects callers outside the queue.
+            with (local_dir / "launch_attempt.json").open("x", encoding="utf-8") as marker:
+                json.dump({"trial_id": trial_id}, marker)
+                marker.flush()
+                os.fsync(marker.fileno())
             self._exec_remote(client, command)
-        except Exception:
-            try:
-                self._remove_remote_tree(sftp, remote_dir)
-            except Exception:
-                pass
-            raise
         finally:
             sftp.close()
             client.close()
 
-        trial = TrialRecord(
-            trial_id=trial_id,
-            display_name=display_name,
-            experiment_id=experiment_id,
-            iteration=self._next_iteration(self.repo.list_trials(experiment_id)),
-            params=validation["normalized_params"],
-            status=STATE_TRAINING,
-            run_dir=str(local_dir),
-            source=REMOTE_SOURCE,
-            note=(note or "").strip(),
-            model=remote_model,
-            model_source="remote_config",
-            params_source="manual",
-            remote_server_id=remote_server_id,
-            remote_run_dir=remote_dir,
-            sync_status=REMOTE_SYNC_PENDING,
-            remote_training_status=REMOTE_TRAINING_RUNNING,
-        )
-        self.repo.create_trial(trial)
-        self.repo.update_experiment_status(experiment_id, STATE_TRAINING)
+        self.repo.update_trial(trial_id, dataset_analysis=dataset_analysis, remote_training_status=REMOTE_TRAINING_RUNNING)
         self.repo.add_event(experiment_id, "REMOTE_TRIAL_STARTED", {"trial_id": trial_id, "remote_run_dir": remote_dir}, trial_id)
         return {"status": public_task_status(STATE_TRAINING, REMOTE_TRAINING_RUNNING), "internal_status": STATE_TRAINING, "trial_id": trial_id, "display_name": display_name, "remote_run_dir": remote_dir}
+
+    def check_remote_trial_status(self, trial_id: str) -> dict[str, str]:
+        """Read worker metadata only. Ambiguous/dead nonterminal workers retain their slot."""
+        client = None
+        deadline = None
+        timed_out = threading.Event()
+        try:
+            trial = self.repo.get_trial(trial_id)
+            if trial.source != REMOTE_SOURCE or not trial.remote_run_dir:
+                return {"state": "unknown", "error": "no managed remote launch identity"}
+            server = self.repo.get_remote_server(trial.remote_server_id)
+            snapshot_path = Path(trial.run_dir) / "prepared_request.json"
+            remote_python = read_json(snapshot_path)["remote_python"] if snapshot_path.is_file() else server.remote_python
+            client = self._open_ssh(server, timeout=10)
+            def expire() -> None:
+                timed_out.set()
+                try:
+                    client.close()
+                except Exception:
+                    pass
+            deadline = threading.Timer(10.0, expire)
+            deadline.daemon = True
+            deadline.start()
+            # Execute our local checker source, never remote file contents as code.
+            from backend.core import remote_train_worker
+            source = Path(remote_train_worker.__file__).read_text(encoding="utf-8")
+            command = (f"{shlex.quote(remote_python)} -c {shlex.quote(source)} --status "
+                       f"{shlex.quote(trial.remote_run_dir)} {shlex.quote(trial_id)}")
+            result = json.loads(self._exec_remote(client, command))
+            if timed_out.is_set():
+                return {"state": "unknown", "error": "remote status check timed out"}
+            if result.get("state") not in {"running", "completed", "failed", "unknown"}:
+                raise ServiceError("invalid remote status response")
+            return {"state": result["state"], "error": str(result.get("error") or "")}
+        except Exception as exc:
+            return {"state": "unknown", "error": "remote status check timed out" if timed_out.is_set() else str(exc)}
+        finally:
+            if deadline is not None:
+                deadline.cancel()
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
     def get_param_metadata(self, experiment_id: str) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)
@@ -2237,7 +2429,8 @@ class OrchestratorService:
         trial_id = self.repo.next_trial_id()
         iteration = self._next_iteration(trials)
         cache_dir = ensure_dir(Path(config.save_root) / "experiments" / experiment_id / display_name)
-        dataset_analysis = analyze_dataset(config.dataset_yaml)
+        dataset_analysis: dict[str, Any] = {}
+        (cache_dir / "args.yaml").write_text(args_text, encoding="utf-8")
         write_json(cache_dir / TRIAL_CONFIG_FILENAME, trial_params)
         trial = TrialRecord(
             trial_id=trial_id,
@@ -2330,6 +2523,8 @@ class OrchestratorService:
             try:
                 self._download_remote_file(sftp, self._remote_join(trial.remote_run_dir, "status.json"), cache_dir / "status.json")
                 remote_status_data = read_json(cache_dir / "status.json")
+                if not isinstance(remote_status_data, dict) or remote_status_data.get("trial_id", trial_id) != trial_id:
+                    remote_status_data = {}
             except (OSError, ValueError, TypeError):
                 remote_status_data = {}
             for filename in ("stdout.log", "stderr.log", "args.yaml"):
@@ -2337,14 +2532,16 @@ class OrchestratorService:
                     self._download_remote_file(sftp, self._remote_join(trial.remote_run_dir, filename), cache_dir / filename)
                 except OSError:
                     pass
+            # Dataset analysis is a launch-time snapshot. Never recompute it
+            # against mutable dataset files when refreshing historical trials.
             remote_csv = self._remote_join(trial.remote_run_dir, "results.csv")
             try:
                 csv_stat = sftp.stat(remote_csv)
                 self._download_remote_file(sftp, remote_csv, cache_dir / "results.csv")
             except OSError:
-                if remote_status_data.get("status") not in {"running", "completed"}:
+                if remote_status_data.get("status") not in {"running", "completed", "failed"} and trial.status not in {STATE_COMPLETED, STATE_FAILED, STATE_CANCELLED}:
                     raise
-            self._download_top_level_pngs(sftp, trial.remote_run_dir, cache_dir)
+            self._download_top_level_visualizations(sftp, trial.remote_run_dir, cache_dir)
             if remote_status_data.get("status") == "completed":
                 for filename in ("weights/best.pt", "weights/last.pt"):
                     try:
@@ -2359,13 +2556,21 @@ class OrchestratorService:
                 sync_error=sync_error,
                 last_synced_at=utc_now_iso(),
             )
-            raise ServiceError(f"remote sync failed: {sync_error}") from exc
+            if remote_status_data.get("status") not in {"completed", "failed"} and trial.status not in {STATE_COMPLETED, STATE_FAILED, STATE_CANCELLED}:
+                raise ServiceError(f"remote sync failed: {sync_error}") from exc
         finally:
             sftp.close()
             client.close()
 
-        args_data = _parse_args_yaml((cache_dir / "args.yaml").read_text(encoding="utf-8")) if (cache_dir / "args.yaml").exists() else dict(trial.params)
-        epoch_count = _valid_epoch_count(cache_dir / "results.csv") if (cache_dir / "results.csv").exists() else 0
+        args_data = dict(trial.params)
+        epoch_count = 0
+        try:
+            if (cache_dir / "args.yaml").exists():
+                args_data = _parse_args_yaml((cache_dir / "args.yaml").read_text(encoding="utf-8"))
+            if (cache_dir / "results.csv").exists():
+                epoch_count = _valid_epoch_count(cache_dir / "results.csv")
+        except Exception as exc:
+            sync_error = f"results parse failed: {exc}"
         remote_size = int(getattr(csv_stat, "st_size", 0) or 0)
         remote_mtime = float(getattr(csv_stat, "st_mtime", 0) or 0)
         unchanged = (
@@ -2380,6 +2585,8 @@ class OrchestratorService:
         # an unexpected epoch value) while training is still in progress.
         if remote_status == "running":
             remote_training_status = REMOTE_TRAINING_RUNNING
+        elif (cache_dir / "prepared_request.json").exists():
+            remote_training_status = REMOTE_TRAINING_UNKNOWN
         else:
             remote_training_status = self._remote_training_status(args_data, epoch_count, unchanged_count, remote_size)
         if remote_status == "completed":
@@ -2416,6 +2623,19 @@ class OrchestratorService:
         elif not sync_error and remote_training_status not in {REMOTE_TRAINING_RUNNING, REMOTE_TRAINING_UNKNOWN}:
             sync_error = "results.csv has no valid epoch rows"
 
+        # Artifact availability/parsing must never undo a terminal execution outcome.
+        # Re-read to include a queue completion persisted during this download.
+        latest_trial = self.repo.get_trial(trial_id)
+        if remote_status == "failed":
+            next_status = STATE_FAILED
+        elif remote_status == "completed":
+            next_status = STATE_COMPLETED
+            if not final_metrics and not sync_error:
+                sync_error = "results.csv has no valid epoch rows"
+        elif latest_trial.status in {STATE_COMPLETED, STATE_FAILED, STATE_CANCELLED}:
+            next_status = latest_trial.status
+            remote_training_status = latest_trial.remote_training_status
+
         self.repo.update_trial(
             trial_id,
             status=next_status,
@@ -2430,7 +2650,6 @@ class OrchestratorService:
             unchanged_sync_count=unchanged_count,
             last_synced_at=utc_now_iso(),
         )
-        self.repo.update_experiment_status(trial.experiment_id, next_status)
         self.repo.add_event(
             trial.experiment_id,
             "REMOTE_TRIAL_SYNCED",
@@ -2637,6 +2856,28 @@ class OrchestratorService:
     def _remote_join(self, remote_dir: str, filename: str) -> str:
         return posixpath.join(remote_dir.rstrip("/"), filename)
 
+    def _analyze_remote_dataset(
+        self, client: Any, remote_python: str, dataset_yaml: str, remote_run_dir: str,
+    ) -> dict[str, Any]:
+        """Run the shared, metadata-only analyzer where the dataset actually lives."""
+        try:
+            if not dataset_yaml:
+                raise ValueError("训练启动时缺少远程数据集路径，未生成统计快照")
+            source = (Path(__file__).resolve().parent / "core" / "dataset.py").read_text(encoding="utf-8")
+            script = (
+                source + "\nimport json, os\n"
+                + f"os.chdir({remote_run_dir!r})\n"
+                + f"print(json.dumps(analyze_dataset({dataset_yaml!r}), ensure_ascii=True))\n"
+            )
+            output = self._exec_remote(client, f"{shlex.quote(remote_python)} -c {shlex.quote(script)}")
+            result = json.loads(output.strip())
+            if not isinstance(result, dict) or "totals" not in result or "splits" not in result:
+                raise ValueError("远程数据集分析返回了无效结果")
+            return {**result, "source": "remote", "status": "completed", "captured_at": utc_now_iso()}
+        except Exception as exc:
+            return {"source": "remote", "status": "failed", "dataset_yaml": dataset_yaml,
+                    "warnings": [f"远程数据集分析失败：{exc}"]}
+
     def _exec_remote(self, client: Any, command: str, *, check: bool = True) -> str:
         _stdin, stdout, stderr = client.exec_command(command)
         exit_status = stdout.channel.recv_exit_status()
@@ -2649,6 +2890,23 @@ class OrchestratorService:
         if check and exit_status != 0:
             raise ServiceError(str(error or output or f"remote command failed with code {exit_status}").strip())
         return str(output or "")
+
+    def _check_remote_python(self, client: Any, remote_python: str) -> dict[str, str]:
+        """Verify the configured interpreter, rather than only checking its executable bit."""
+        script = "import sys, ultralytics; print(sys.executable); print(ultralytics.__version__)"
+        try:
+            output = self._exec_remote(
+                client,
+                f"{shlex.quote(remote_python)} -c {shlex.quote(script)}",
+            )
+        except ServiceError as exc:
+            raise ServiceError(
+                f"remote Python cannot import ultralytics ({remote_python}); "
+                "configure the Python executable from the environment where ultralytics is installed: "
+                f"{exc}"
+            ) from exc
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        return {"executable": lines[0] if lines else remote_python, "ultralytics_version": lines[1] if len(lines) > 1 else ""}
 
     def _resolve_remote_dataset_yaml(self, client: Any, dataset_root: str, dataset_yaml: str) -> str:
         if dataset_yaml:
@@ -2675,6 +2933,112 @@ class OrchestratorService:
     def _upload_remote_file(self, sftp: Any, local_path: Path, remote_path: str) -> None:
         sftp.put(str(local_path), remote_path)
 
+    def _upload_remote_text(self, sftp: Any, value: str, remote_path: str) -> None:
+        with sftp.open(remote_path, "w") as handle:
+            handle.write(value)
+
+    def _remote_text(self, sftp: Any, remote_path: str) -> str:
+        try:
+            with sftp.open(remote_path, "r") as handle:
+                data = handle.read()
+            return data.decode("utf-8") if isinstance(data, bytes) else str(data)
+        except (OSError, IOError):
+            return ""
+
+    def _local_dataset_fingerprint(self, local_root: Path) -> str:
+        digest = hashlib.sha256()
+        for path in sorted((item for item in local_root.rglob("*") if item.is_file() and not item.is_symlink()), key=lambda item: item.relative_to(local_root).as_posix()):
+            digest.update(path.relative_to(local_root).as_posix().encode("utf-8"))
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        return digest.hexdigest()
+
+    def _refresh_managed_remote_dataset(
+        self, sftp: Any, work_root: str, experiment_id: str,
+        remote_root: str, previous_fingerprint: str,
+    ) -> None:
+        """Refresh only a proven owned dataset; callers serialize target+experiment.
+
+        A refreshing marker retains ownership but invalidates the old cache even if
+        cleanup/upload is interrupted. The final hash is published after YAML upload.
+        """
+        normalized_work = posixpath.normpath(work_root)
+        if (not re.fullmatch(r"[A-Za-z0-9_-]+", experiment_id)
+                or not work_root.startswith("/") or work_root.startswith("//")
+                or normalized_work != (work_root.rstrip("/") or "/")
+                or any(c in work_root for c in ("\\", "\x00", "\n", "\r"))):
+            raise ServiceError("unsafe managed dataset work_root/experiment path")
+        expected_parent = posixpath.join(normalized_work, "experiments", experiment_id)
+        expected_root = posixpath.join(expected_parent, "dataset")
+        manifest = posixpath.join(expected_parent, "dataset.manifest.json")
+        if remote_root != expected_root or not re.fullmatch(r"(?:refreshing:)?[0-9a-f]{64}", previous_fingerprint):
+            raise ServiceError("managed dataset refresh requires exact path and valid ownership manifest")
+        if sftp.normalize(expected_parent) != expected_parent or sftp.normalize(manifest) != manifest:
+            raise ServiceError("managed dataset refresh refuses redirected paths")
+        if not stat.S_ISREG(sftp.lstat(manifest).st_mode):
+            raise ServiceError("managed dataset ownership manifest must be a regular file")
+        if self._remote_text(sftp, manifest) != previous_fingerprint:
+            raise ServiceError("managed dataset ownership manifest changed during preparation")
+        try:
+            root_mode = sftp.lstat(expected_root).st_mode
+        except FileNotFoundError:
+            root_mode = None
+        if root_mode is not None and not stat.S_ISDIR(root_mode):
+            raise ServiceError("managed dataset root must be a directory, not a symlink")
+
+        def remove_contents(directory: str) -> None:
+            for entry in sftp.listdir_attr(directory):
+                name = entry.filename
+                if (not name or name in {".", ".."} or "/" in name or "\\" in name
+                        or "\x00" in name):
+                    raise ServiceError("unsafe managed dataset entry")
+                child = posixpath.join(directory, name)
+                if posixpath.commonpath([expected_root, child]) != expected_root:
+                    raise ServiceError("managed dataset entry escapes dataset root")
+                # lstat never follows a symlink into another tree.
+                mode = sftp.lstat(child).st_mode
+                if stat.S_ISDIR(mode):
+                    remove_contents(child)
+                    sftp.rmdir(child)
+                else:
+                    sftp.remove(child)
+
+        self._upload_remote_text(sftp, "refreshing:" + previous_fingerprint.removeprefix("refreshing:"), manifest)
+        if root_mode is not None:
+            remove_contents(expected_root)
+
+    def _upload_local_dataset(self, sftp: Any, local_root: Path, local_yaml: Path, remote_root: str) -> None:
+        """Upload a local dataset tree while preserving its relative layout."""
+        self._mkdir_remote(sftp, remote_root)
+        for path in local_root.rglob("*"):
+            if not path.is_file() or path.is_symlink():
+                continue
+            remote_path = self._remote_join(remote_root, path.relative_to(local_root).as_posix())
+            self._mkdir_remote(sftp, posixpath.dirname(remote_path))
+            self._upload_remote_file(sftp, path, remote_path)
+
+    def _write_remote_dataset_yaml(self, target: Path, source: Path, local_root: Path, remote_root: str) -> None:
+        if yaml is None:
+            raise ServiceError("PyYAML is required to upload a local dataset")
+        try:
+            data = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            raise ServiceError(f"failed to read local dataset YAML: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ServiceError("local dataset YAML must contain a mapping")
+        data["path"] = remote_root
+        for key in ("train", "val", "test"):
+            value = data.get(key)
+            if isinstance(value, str):
+                candidate = Path(value)
+                if candidate.is_absolute():
+                    try:
+                        data[key] = candidate.relative_to(local_root).as_posix()
+                    except ValueError:
+                        pass
+        target.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
     def _remove_remote_tree(self, sftp: Any, remote_dir: str) -> None:
         try:
             entries = sftp.listdir_attr(remote_dir)
@@ -2696,6 +3060,14 @@ class OrchestratorService:
             pass
 
     def _open_sftp(self, server: RemoteServer) -> tuple[Any, Any]:
+        client = self._open_ssh(server)
+        try:
+            return client, client.open_sftp()
+        except Exception:
+            client.close()
+            raise
+
+    def _open_ssh(self, server: RemoteServer, *, timeout: float = 15) -> Any:
         try:
             import paramiko
         except ImportError as exc:
@@ -2707,20 +3079,25 @@ class OrchestratorService:
             "hostname": server.host,
             "port": int(server.port),
             "username": server.username,
-            "timeout": 15,
+            "timeout": timeout,
+            "banner_timeout": timeout,
+            "auth_timeout": timeout,
         }
         if server.auth_type == "key":
             kwargs["key_filename"] = str(Path(server.private_key_path).expanduser())
         else:
             password = server.password or os.environ.get(server.password_ref)
             if password is None:
+                client.close()
                 raise ServiceError(f"password env var not found: {server.password_ref}")
             kwargs["password"] = password
         try:
             client.connect(**kwargs)
-            return client, client.open_sftp()
+            return client
         except Exception as exc:
             client.close()
+            if isinstance(exc, TimeoutError):
+                raise
             raise ServiceError(f"failed to connect remote server {server.remote_server_id}: {exc}") from exc
 
     def _read_remote_text(self, server: RemoteServer, remote_path: str) -> str:
@@ -2755,14 +3132,16 @@ class OrchestratorService:
                 except OSError:
                     pass
 
-    def _download_top_level_pngs(self, sftp: Any, remote_dir: str, cache_dir: Path) -> None:
+    def _download_top_level_visualizations(self, sftp: Any, remote_dir: str, cache_dir: Path) -> None:
+        """Sync Ultralytics plots, including train/val batch JPEGs."""
         try:
             entries = sftp.listdir_attr(remote_dir)
         except OSError:
             return
         for entry in entries:
             name = getattr(entry, "filename", "")
-            if not name.lower().endswith(".png"):
+            suffix = Path(name).suffix.lower()
+            if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
                 continue
             try:
                 self._download_remote_file(
