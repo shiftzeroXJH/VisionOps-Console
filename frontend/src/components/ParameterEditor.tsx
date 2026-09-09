@@ -48,13 +48,13 @@ const PARAM_GROUPS: ParamGroup[] = [
     id: 'geometry',
     title: '几何增强',
     description: '适合 AOI 场景的轻量几何扰动，避免破坏目标结构。',
-    keys: ['degrees', 'translate', 'scale', 'shear', 'perspective', 'flipud', 'fliplr'],
+    keys: ['degrees', 'translate', 'scale', 'flipud', 'fliplr'],
   },
   {
     id: 'appearance',
     title: '颜色与拼接增强',
     description: '颜色扰动和拼接增强，默认保持偏保守。',
-    keys: ['hsv_h', 'hsv_s', 'hsv_v', 'mosaic', 'mixup', 'copy_paste', 'erasing'],
+    keys: ['hsv_h', 'hsv_s', 'hsv_v', 'mosaic', 'mixup', 'copy_paste'],
   },
 ]
 
@@ -74,8 +74,6 @@ const PARAM_LABELS: Record<string, string> = {
   degrees: 'degrees（旋转角度）',
   translate: 'translate（平移比例）',
   scale: 'scale（缩放幅度）',
-  shear: 'shear（错切幅度）',
-  perspective: 'perspective（透视变换）',
   flipud: 'flipud（上下翻转）',
   fliplr: 'fliplr（左右翻转）',
   hsv_h: 'hsv_h（色相扰动）',
@@ -84,7 +82,6 @@ const PARAM_LABELS: Record<string, string> = {
   mosaic: 'mosaic（马赛克增强）',
   mixup: 'mixup（样本混合）',
   copy_paste: 'copy_paste（复制粘贴增强）',
-  erasing: 'erasing（随机擦除）',
 }
 
 const DEFAULT_EXPANDED: Record<string, boolean> = {
@@ -336,8 +333,11 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
   const schema = schemaData.editable_schema || {}
   const extraSchema = schemaData.extra_param_schema || {}
   const renderField = (key: string) => {
-    const field = schema[key]
-    if (!field) return null
+    const schemaField = schema[key]
+    if (!schemaField) return null
+    const field = key === 'patience'
+      ? { ...schemaField, max: Number(params.epochs) || schemaField.max }
+      : schemaField
     const isError = validationErrors[key]
     const label = PARAM_LABELS[key] || key
     const helper = field.type === 'int' || field.type === 'float'
@@ -369,7 +369,9 @@ export function ParameterEditor({ experimentId, onRunSuccess, onClose }: Props) 
         ) : (
           <input
             type="number"
-            step={field.type === 'int' ? field.step || 1 : 'any'}
+            min={field.min}
+            max={field.max}
+            step={field.type === 'int' ? field.step || 1 : field.step || 'any'}
             className="input"
             style={{ borderColor: isError ? 'var(--danger-color)' : undefined }}
             value={params[key] ?? ''}

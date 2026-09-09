@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.constants import SEARCH_SPACE, TASK_BASELINES
+from backend.constants import EXTRA_ONLY_YOLO_PARAMS, SEARCH_SPACE, TASK_BASELINES
 from backend.core.constraints import validate_param_value
 
 
@@ -17,6 +17,10 @@ def build_initial_params(task_type: str, overrides: dict[str, Any]) -> dict[str,
     params = dict(TASK_BASELINES[task_type])
     for key, value in overrides.items():
         if value is None:
+            continue
+        if key in EXTRA_ONLY_YOLO_PARAMS:
+            # Ignore legacy fixed defaults. Non-default values from completed
+            # trials are retained separately as optional YOLO parameters.
             continue
         if key not in SEARCH_SPACE:
             raise BaselineError(f"unsupported initial param: {key}")

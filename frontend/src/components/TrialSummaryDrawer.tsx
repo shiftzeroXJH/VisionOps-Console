@@ -57,6 +57,7 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
   const [savingName, setSavingName] = useState(false)
   const [showSaveTemplateDialog, setShowSaveTemplateDialog] = useState(false)
   const [templateNotice, setTemplateNotice] = useState('')
+  const [resolvedRemoteServerName, setResolvedRemoteServerName] = useState('')
 
   const trialIdRef = useRef(trialId)
   trialIdRef.current = trialId
@@ -67,6 +68,18 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
       const summary = await api.getTrialSummary(trialIdRef.current)
       setData(summary)
       setDraftName(summary?.trial?.display_name || summary?.trial?.trial_id || '')
+      const remoteTrial = summary?.trial
+      const embeddedName = remoteTrial?.remote_server_name || summary?.remote?.remote_server_name || ''
+      setResolvedRemoteServerName(embeddedName)
+      if (!embeddedName && remoteTrial?.remote_server_id) {
+        try {
+          const serverData = await api.getRemoteServers()
+          const server = serverData.remote_servers?.find((item: any) => item.remote_server_id === remoteTrial.remote_server_id)
+          setResolvedRemoteServerName(server?.name || '')
+        } catch {
+          // The stable server ID remains available when the server list cannot be loaded.
+        }
+      }
     } finally {
       setLoading(false)
     }
@@ -98,6 +111,7 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
   const isRemote = trial.source === 'remote_sftp'
   const displayName = trial.display_name || trial.trial_id || trialId
   const continuation = data?.continuation || {}
+  const remoteServerName = trial.remote_server_name || data?.remote?.remote_server_name || resolvedRemoteServerName
 
   const saveTrialName = async () => {
     const nextName = draftName.trim()
@@ -275,6 +289,17 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                         <tr><td className="text-muted">模型来源</td><td>{trial.model_source || '-'}</td></tr>
                         <tr><td className="text-muted">参数来源</td><td>{trial.params_source || '-'}</td></tr>
                         <tr><td className="text-muted">任务状态</td><td>{trial.status || '-'}</td></tr>
+                        {isRemote && (
+                          <tr>
+                            <td className="text-muted">远程服务器</td>
+                            <td>
+                              {remoteServerName || trial.remote_server_id || '-'}
+                              {trial.remote_server_id && trial.remote_server_id !== remoteServerName && (
+                                <span className="text-muted font-mono" style={{ marginLeft: '0.4rem', fontSize: '0.72rem' }}>({trial.remote_server_id})</span>
+                              )}
+                            </td>
+                          </tr>
+                        )}
                         {trial.remote_training_status && <tr><td className="text-muted">远程训练状态</td><td>{trial.remote_training_status}</td></tr>}
                         <tr><td className="text-muted">同步状态</td><td>{trial.sync_status || '-'}</td></tr>
                         <tr><td className="text-muted">最近同步</td><td className="font-mono">{trial.last_synced_at || '-'}</td></tr>

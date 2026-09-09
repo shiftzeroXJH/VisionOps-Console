@@ -64,8 +64,8 @@ export function ContinueTrainingDialog({ trialId, onClose, onSubmitted }: Props)
       setError('初始学习率必须在 0.00001 到 0.1 之间')
       return
     }
-    if (!Number.isInteger(patience) || patience < 0 || patience > 300) {
-      setError('patience 必须是 0 到 300 的整数')
+    if (!Number.isInteger(patience) || patience < 0 || patience > additionalEpochs) {
+      setError(`patience 必须是 0 到追加 epochs（${additionalEpochs}）之间的整数`)
       return
     }
     const payload = { additional_epochs: additionalEpochs, lr0, patience, note: note.trim() || undefined }
@@ -116,12 +116,12 @@ export function ContinueTrainingDialog({ trialId, onClose, onSubmitted }: Props)
           </label>
           <label className="param-label">
             <span>初始学习率 lr0</span>
-            <input className="input" type="number" min={0.00001} max={0.1} step="any" value={lr0} onChange={(event) => setLr0(Number(event.target.value))} />
+            <input className="input" type="number" min={0.00001} max={0.1} step={0.01} value={lr0} onChange={(event) => setLr0(Number(event.target.value))} />
             <span className="param-helper">原值 {options?.defaults?.original_lr0 ?? '-'}，默认使用原值的 10%</span>
           </label>
           <label className="param-label">
             <span>早停 patience</span>
-            <input className="input" type="number" min={0} max={500} step={1} value={patience} onChange={(event) => setPatience(Number(event.target.value))} />
+            <input className="input" type="number" min={0} max={additionalEpochs} step={1} value={patience} onChange={(event) => setPatience(Number(event.target.value))} />
           </label>
           <label className="param-label continue-training-note">
             <span>备注</span>

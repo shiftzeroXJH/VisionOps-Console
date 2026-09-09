@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - supplied by ultralytics runtime
 
 from backend.constants import (
     EXPERIMENT_FILENAME,
+    EXTRA_ONLY_YOLO_PARAMS,
     SEARCH_SPACE,
     DEFAULT_MAX_PARALLEL_TRAINING_TASKS,
     MAX_PARALLEL_TRAINING_SETTING_KEY,
@@ -1285,8 +1286,9 @@ class OrchestratorService:
     def get_param_metadata(self, experiment_id: str) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)
         trials = self.repo.list_trials(experiment_id)
+        # Stored experiments contain a snapshot of the old schema. Always use
+        # the current platform schema so option removals and bounds take effect.
         merged_search_space = dict(SEARCH_SPACE)
-        merged_search_space.update(config.search_space or {})
         return {
             "experiment_id": experiment_id,
             "task_type": config.task_type,
@@ -1411,6 +1413,9 @@ class OrchestratorService:
                 errors[key] = str(exc)
         if int(normalized.get("workers", 1) or 0) == 0:
             warnings.append("workers is 0; data loading may be slow")
+        if "patience" not in errors and "epochs" not in errors:
+            if int(normalized.get("patience", 0)) > int(normalized.get("epochs", 0)):
+                errors["patience"] = "patience cannot exceed epochs"
         if errors:
             return {
                 "valid": False,
@@ -1929,6 +1934,12 @@ class OrchestratorService:
                 parent_display_name = self.repo.get_trial(trial.parent_trial_id).display_name
             except KeyError:
                 parent_display_name = trial.parent_trial_id
+        remote_server_name = ""
+        if trial.remote_server_id:
+            try:
+                remote_server_name = self.repo.get_remote_server(trial.remote_server_id).name
+            except KeyError:
+                remote_server_name = trial.remote_server_id
         if compact:
             return {
                 "trial_id": trial_id,
@@ -1945,6 +1956,7 @@ class OrchestratorService:
                 "model_source": trial.model_source,
                 "params_source": trial.params_source,
                 "remote_server_id": trial.remote_server_id,
+                "remote_server_name": remote_server_name,
                 "remote_run_dir": trial.remote_run_dir,
                 "sync_status": trial.sync_status,
                 "sync_error": trial.sync_error,
@@ -1988,6 +2000,7 @@ class OrchestratorService:
             "model_source": trial.model_source,
             "params_source": trial.params_source,
             "remote_server_id": trial.remote_server_id,
+            "remote_server_name": remote_server_name,
             "remote_run_dir": trial.remote_run_dir,
             "sync_status": trial.sync_status,
             "sync_error": trial.sync_error,
@@ -2765,7 +2778,11 @@ class OrchestratorService:
         for trial in reversed(trials):
             if trial.params:
                 merged = dict(base_params)
-                merged.update(trial.params)
+                merged.update({
+                    key: value
+                    for key, value in trial.params.items()
+                    if key not in EXTRA_ONLY_YOLO_PARAMS or value not in (0, 0.0, None)
+                })
                 return merged
         return dict(base_params)
 

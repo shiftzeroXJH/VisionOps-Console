@@ -3,24 +3,24 @@ from backend.core.baseline import build_initial_params
 from backend.core.constraints import validate_param_value
 
 
-def test_erasing_is_in_search_space() -> None:
-    assert SEARCH_SPACE["erasing"] == {"type": "float", "min": 0.0, "max": 1.0}
+def test_erasing_is_not_a_fixed_parameter() -> None:
+    assert "erasing" not in SEARCH_SPACE
 
 
-def test_erasing_is_in_task_baseline() -> None:
-    assert TASK_BASELINES["detection"]["erasing"] == 0.0
+def test_erasing_is_not_in_task_baseline() -> None:
+    assert "erasing" not in TASK_BASELINES["detection"]
 
 
-def test_erasing_can_be_used_in_initial_params() -> None:
+def test_legacy_erasing_default_is_ignored_in_initial_params() -> None:
     params = build_initial_params("detection", {"erasing": 0.25})
-    assert params["erasing"] == 0.25
+    assert "erasing" not in params
 
 
-def test_erasing_validation_rejects_out_of_range_values() -> None:
+def test_erasing_is_not_validated_as_a_fixed_parameter() -> None:
     try:
-        validate_param_value("erasing", 1.5)
+        validate_param_value("erasing", 0.5)
     except ValueError as exc:
-        assert "invalid value for 'erasing'" in str(exc)
+        assert "not in the search space" in str(exc)
     else:
-        raise AssertionError("expected validate_param_value to reject erasing > 1.0")
+        raise AssertionError("expected erasing to be extra-only")
 
