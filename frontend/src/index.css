@@ -1478,7 +1478,7 @@ tr:hover td {
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
-  width: 560px;
+  width: 476px;
   max-width: calc(100vw - 1.5rem);
   max-height: 33.333dvh;
   box-sizing: border-box;
@@ -1841,4 +1841,3 @@ tr:hover td {
 .training-task-group-toggle span { margin-left: auto; flex-shrink: 0; font-size: 0.78rem; }
 .training-task-detail { grid-column: 1 / -1; font-size: 0.78rem; overflow-wrap: anywhere; white-space: normal; }
 .training-task-state.preparing, .training-task-state.unknown { color: var(--warning-color); }
-.training-task-failure { padding: 0.5rem; color: var(--danger-color); font-size: 0.8rem; overflow-wrap: anywhere; }

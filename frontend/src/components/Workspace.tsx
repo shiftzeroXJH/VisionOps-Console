@@ -479,7 +479,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
       {isCancelling && (
         <ConfirmDialog
           title="停止任务"
-          message="这会立即终止当前本地训练进程，并将实验状态标记为已取消。若当前没有本地训练进程在运行，则只会更新状态。"
+          message="这会停止该实验中正在运行的本地和远程训练。若只需停止其中一个训练，请在模型训练列表中使用对应任务的“停止”按钮。"
           confirmLabel="确认停止"
           confirmClassName="btn btn-danger"
           onClose={() => setIsCancelling(false)}

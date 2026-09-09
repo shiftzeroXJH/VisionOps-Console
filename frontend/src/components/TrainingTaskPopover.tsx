@@ -55,6 +55,9 @@ function TaskRow({ task, queued, index, count, busy, run, onSelectExperiment }: 
           if (confirm(`确定取消“${task.experiment_name}”的排队训练吗？`)) void run(() => api.cancelTrainingTask(task.queue_id))
         }} title="取消排队" aria-label="取消排队"><Trash2 size={13} /></button>
       </>}
+      {!queued && <button className="btn btn-danger" style={{ padding: '0.2rem 0.5rem', height: 26, fontSize: '0.75rem' }} disabled={busy} onClick={() => {
+        if (confirm(`确定停止“${task.experiment_name}”的这一个${task.source === 'remote' ? '远程' : '本地'}训练任务吗？其他训练任务不受影响。`)) void run(() => api.cancelTrainingTask(task.queue_id))
+      }} title="停止此训练任务" aria-label="停止此训练任务">停止</button>}
       {!queued && phase === 'unknown' && <button className="btn" style={{ padding: '0.2rem 0.5rem', height: 26, fontSize: '0.75rem' }} disabled={busy} onClick={() => void run(() => api.recheckTrainingTask(task.queue_id))}>重新检查</button>}
     </div>
   </div>
@@ -86,7 +89,7 @@ export function TrainingTaskPopover({ data, onChanged, onSelectExperiment, onClo
       let changed = false
       for (const group of groups) {
         if (!(group.target_id in next)) {
-          next[group.target_id] = group.running_count > 0 || group.queued_count > 0 || group.blocked || !!group.last_failure
+          next[group.target_id] = group.running_count > 0 || group.queued_count > 0 || group.blocked
           changed = true
         }
       }
@@ -130,7 +133,7 @@ export function TrainingTaskPopover({ data, onChanged, onSelectExperiment, onClo
     <div className="training-task-popover-scroll">
       {error && <div role="alert" className="text-danger">{error}</div>}
       {groups.map((group) => {
-        const open = expanded[group.target_id] ?? (group.running_count > 0 || group.queued_count > 0 || group.blocked || !!group.last_failure)
+        const open = expanded[group.target_id] ?? (group.running_count > 0 || group.queued_count > 0 || group.blocked)
         return <section className="training-task-section" key={group.target_id}>
           <button className="training-task-group-toggle" aria-expanded={open} onClick={() => setExpanded((previous) => ({ ...previous, [group.target_id]: !open }))}>
             {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
@@ -138,10 +141,9 @@ export function TrainingTaskPopover({ data, onChanged, onSelectExperiment, onClo
             <span>运行 {group.running_count}/{group.max_parallel_training_tasks} · 排队 {group.queued_count}</span>
           </button>
           {open && <>
-            {group.blocked && <div className="training-task-detail text-warning">队列已阻塞，请检查未知状态任务或最近失败原因。</div>}
+            {group.blocked && <div className="training-task-detail text-warning">队列已阻塞，请检查未知状态任务。</div>}
             {group.running.map((task, index) => <TaskRow key={task.queue_id} task={task} queued={false} index={index} count={group.running.length} busy={busy} run={run} onSelectExperiment={onSelectExperiment} />)}
             {group.queued.map((task, index) => <TaskRow key={task.queue_id} task={task} queued index={index} count={group.queued.length} busy={busy} run={run} onSelectExperiment={onSelectExperiment} />)}
-            {group.last_failure && <div className="training-task-failure"><strong>最近失败：{group.last_failure.experiment_name}</strong><div>{group.last_failure.error || group.last_failure.waiting_reason || '训练失败'}</div></div>}
             {!group.running.length && !group.queued.length && <div className="training-task-empty">当前没有训练或排队任务</div>}
           </>}
         </section>

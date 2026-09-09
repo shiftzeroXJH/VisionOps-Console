@@ -17,6 +17,7 @@ from backend.constants import (
     STATE_RETRAINING,
     STATE_TRAINING,
 )
+from backend.core.trainer import cancel_training_process
 from backend.models import TrainingTask
 from backend.service import OrchestratorService, ServiceError
 from backend.utils import utc_now_iso
@@ -260,8 +261,27 @@ class TrainingQueue:
     def cancel(self, queue_id: str) -> dict[str, Any]:
         with self._lock:
             task = self.repo.get_training_task(queue_id)
+            if task.status == QUEUE_STATUS_CANCELLED:
+                return {"training_task": self._task_payload(task)}
+            if task.status == QUEUE_STATUS_RUNNING:
+                if task.source == "remote":
+                    if queue_id in self._remote_launching or queue_id in self._checking:
+                        raise ServiceError("远程任务正在启动或核对状态，请稍后重试")
+                    result = self.service.cancel_remote_trial(task.trial_id)
+                    state = result.get("state", "cancelled")
+                    if state in {"completed", "failed", "cancelled"}:
+                        self._finish_remote_locked(task, state, "")
+                    else:
+                        self.repo.update_trial(task.trial_id, status=STATE_CANCELLED)
+                        self.repo.update_training_task(queue_id, status=QUEUE_STATUS_CANCELLED,
+                                                       error="", finished_at=utc_now_iso())
+                    self._restore_experiment_status_locked(task.experiment_id)
+                    self._dispatch_locked()
+                elif not task.trial_id or not cancel_training_process(task.trial_id):
+                    raise ServiceError("本地任务正在准备或收尾，暂时无法停止，请稍后重试")
+                return {"training_task": self._task_payload(self.repo.get_training_task(queue_id))}
             if task.status != QUEUE_STATUS_QUEUED:
-                raise ServiceError("only queued training tasks can be cancelled")
+                raise ServiceError("训练任务已结束，无法取消")
             if not self.repo.cancel_queued_training_task(queue_id):
                 raise ServiceError("task has already started; it can no longer be cancelled from the queue")
             self._restore_experiment_status_locked(task.experiment_id)
@@ -340,8 +360,7 @@ class TrainingQueue:
                 finished_at=utc_now_iso(),
             )
             self.repo.update_experiment_status(task.experiment_id, internal_status)
-            if self._experiment_has_queued_task(task.experiment_id):
-                self.repo.update_experiment_status(task.experiment_id, STATE_QUEUED)
+            self._restore_experiment_status_locked(task.experiment_id)
             self._dispatch_locked()
 
     def _adopt_remote_trials_locked(self) -> None:
@@ -399,8 +418,8 @@ class TrainingQueue:
                 self._dispatch_locked()
 
     def _finish_remote_locked(self, task: TrainingTask, state: str, error: str) -> None:
-        status = STATE_COMPLETED if state == "completed" else STATE_FAILED
-        self.repo.update_training_task(task.queue_id, status=QUEUE_STATUS_COMPLETED if state == "completed" else QUEUE_STATUS_FAILED,
+        status = STATE_COMPLETED if state == "completed" else STATE_CANCELLED if state == "cancelled" else STATE_FAILED
+        self.repo.update_training_task(task.queue_id, status=status,
                                        phase="running", error=error, finished_at=utc_now_iso())
         if task.trial_id:
             try:
@@ -428,7 +447,7 @@ class TrainingQueue:
                 current = self.repo.get_training_task(queue_id)
                 if current.status == QUEUE_STATUS_RUNNING:
                     state = result.get("state", "unknown")
-                    if state in {"completed", "failed"}:
+                    if state in {"completed", "failed", "cancelled"}:
                         self._finish_remote_locked(current, state, str(result.get("error") or ""))
                     else:
                         self.repo.update_training_task(queue_id, phase="running" if state == "running" else "unknown",

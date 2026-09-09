@@ -65,7 +65,7 @@ def _legacy_status(run_dir: Path, status: dict) -> dict:
     try:
         process_dir.stat()
     except FileNotFoundError:
-        if status.get("status") in {"completed", "failed"}:
+        if status.get("status") in {"completed", "failed", "cancelled"}:
             return {"state": status["status"], "error": str(status.get("error") or "")}
         return unknown
     if status.get("status") == "running":
@@ -91,7 +91,7 @@ def check_status(run_dir: Path, trial_id: str) -> dict:
         import fcntl
         if status.get("trial_id") != trial_id or marker.get("trial_id") != trial_id:
             return unknown
-        if status.get("status") not in {"running", "completed", "failed"}:
+        if status.get("status") not in {"running", "completed", "failed", "cancelled"}:
             return unknown
         identity = status["identity"]
         if (identity != marker["identity"] or type(identity.get("pid")) is not int or identity["pid"] <= 0
@@ -110,13 +110,52 @@ def check_status(run_dir: Path, trial_id: str) -> dict:
                 return {"state": "running", "error": ""} if alive else unknown
             if alive:
                 return {"state": "running", "error": ""}
-            if status.get("status") in {"completed", "failed"}:
+            if status.get("status") in {"completed", "failed", "cancelled"}:
                 return {"state": status["status"], "error": str(status.get("error") or "")}
             if status.get("status") == "running":
                 return {"state": "failed", "error": "远程训练进程已退出，未写入完成状态"}
         return unknown
     except Exception:
         return unknown
+
+
+def cancel_worker(run_dir: Path, trial_id: str) -> dict:
+    import signal
+    import time
+    result = check_status(run_dir, trial_id)
+    if result["state"] in {"completed", "failed", "cancelled"}:
+        return result
+    if result["state"] != "running":
+        return {"state": "unknown", "error": "无法验证远程进程身份，未停止任务"}
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        pid = status.get("pid") or status["identity"]["pid"]
+        identity = _identity(pid)
+        if status.get("identity", identity) != identity or os.getpgid(pid) != pid:
+            return {"state": "unknown", "error": "远程进程身份或进程组不匹配"}
+        # Signal only the verified worker's dedicated session, including its children.
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            if _identity(pid) != identity:
+                return {"state": "unknown", "error": "远程进程身份已变化"}
+            os.killpg(pid, sig)
+            for _ in range(30):
+                time.sleep(0.1)
+                # Zombies cannot execute or retain GPU resources.
+                members = []
+                for stat in Path("/proc").glob("[0-9]*/stat"):
+                    try:
+                        fields = stat.read_text().rsplit(")", 1)[1].split()
+                        if int(fields[2]) == pid and fields[0] != "Z":
+                            members.append(stat)
+                    except FileNotFoundError:
+                        pass
+                if not members:
+                    _status(run_dir / "status.json", "cancelled", trial_id=trial_id,
+                            identity=identity, pid=pid, error="cancelled by user", finished_at=_now())
+                    return {"state": "cancelled"}
+        return {"state": "unknown", "error": "远程进程尚未停止"}
+    except Exception as exc:
+        return {"state": "unknown", "error": str(exc)}
 
 
 def _save_per_class_metrics(request: dict, run_dir: Path) -> None:
@@ -229,6 +268,9 @@ def _metric_value(values: list[float | None], index: int | None) -> float | None
 
 
 def main() -> int:
+    if len(sys.argv) == 4 and sys.argv[1] == "--cancel":
+        print(json.dumps(cancel_worker(Path(sys.argv[2]), sys.argv[3])))
+        return 0
     if len(sys.argv) == 4 and sys.argv[1] == "--status":
         print(json.dumps(check_status(Path(sys.argv[2]), sys.argv[3])))
         return 0

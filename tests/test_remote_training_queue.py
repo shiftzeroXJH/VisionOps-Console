@@ -298,3 +298,50 @@ def test_queue_api_remote_submission_groups_and_server_settings(setup, monkeypat
     assert edited.status_code == 200
     assert edited.json()["remote_server"]["max_parallel_training_tasks"] == 2
     assert "password" not in edited.json()["remote_server"]
+
+
+def test_cancel_running_remote_only_selected_task(setup, monkeypatch):
+    service, queue, launches, states = setup
+    queue.start()
+    first = submit(queue)
+    other = submit(queue, "a", "s2")
+    waiting = submit(queue, "b")
+    wait_for(lambda: len(launches) == 2 and not queue._remote_launching)
+    calls = []
+    monkeypatch.setattr(service, "cancel_remote_trial", lambda trial_id: calls.append(trial_id) or {"state": "cancelled"})
+    queue.cancel(first["queue_id"])
+    wait_for(lambda: len(launches) == 3)
+    assert calls == [first["trial_id"]]
+    assert service.repo.get_training_task(first["queue_id"]).status == "CANCELLED"
+    assert service.repo.get_training_task(other["queue_id"]).status == "RUNNING"
+    assert service.repo.get_training_task(waiting["queue_id"]).status == "RUNNING"
+    assert service.repo.get_experiment("a").status == "TRAINING"
+
+
+def test_remote_cancel_failure_keeps_slot(setup, monkeypatch):
+    from backend.service import ServiceError
+    service, queue, launches, states = setup
+    queue.start()
+    first = submit(queue)
+    waiting = submit(queue, "b")
+    wait_for(lambda: len(launches) == 1 and not queue._remote_launching)
+    def fail(trial_id):
+        raise ServiceError("SSH unavailable")
+    monkeypatch.setattr(service, "cancel_remote_trial", fail)
+    with pytest.raises(ServiceError):
+        queue.cancel(first["queue_id"])
+    assert service.repo.get_training_task(first["queue_id"]).status == "RUNNING"
+    assert service.repo.get_training_task(waiting["queue_id"]).status == "QUEUED"
+
+
+def test_local_cancel_uses_trial_identity(setup, monkeypatch):
+    service, queue, _, _ = setup
+    task = TrainingTask("local_cancel", "a", {}, "model.pt", "", "", "RUNNING", 0,
+                        trial_id="only_this_trial")
+    service.repo.create_training_task(task)
+    calls = []
+    monkeypatch.setattr("backend.training_queue.cancel_training_process", lambda key: calls.append(key) or True)
+    queue.cancel(task.queue_id)
+    assert calls == ["only_this_trial"]
+    # Retain capacity until the training thread has actually exited.
+    assert service.repo.get_training_task(task.queue_id).status == "RUNNING"

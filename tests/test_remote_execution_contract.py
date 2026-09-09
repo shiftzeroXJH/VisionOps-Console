@@ -67,7 +67,7 @@ def test_snapshot_is_offline_and_isolated(setup_remote, monkeypatch):
     assert events == ["prepared", "launching"]
     request = json.loads((Path(service.repo.get_trial("fixed_trial").run_dir) / "request.json").read_text())
     assert request["dataset_yaml"] == "/data/old.yaml" and request["trial_id"] == "fixed_trial"
-    assert any("nohup /old/python" in c for c in client.commands)
+    assert any("nohup setsid /old/python" in c for c in client.commands)
 
 
 def test_preparing_reuses_trial_and_launching_never_retries(setup_remote, monkeypatch):
@@ -492,3 +492,40 @@ def test_managed_refresh_failure_retains_invalidated_cache_for_retry(setup_remot
         service._refresh_managed_remote_dataset(sftp, "/runs", "exp_contract", sftp.root, "a" * 64)
     assert sftp.texts[sftp.manifest] == "refreshing:" + "a" * 64
     assert sftp.root + "/nested/deleted.txt" in sftp.paths
+
+
+@pytest.mark.parametrize("state", ["unknown", "completed", "failed", "cancelled"])
+def test_cancel_worker_does_not_signal_unverified_or_terminal_process(tmp_path, monkeypatch, state):
+    monkeypatch.setattr(worker, "check_status", lambda *args: {"state": state})
+    monkeypatch.setattr(worker.os, "killpg", lambda *args: pytest.fail("must not signal"), raising=False)
+    assert worker.cancel_worker(tmp_path, "trial")["state"] == state
+
+
+def test_cancel_worker_checks_identity_before_signalling(tmp_path, monkeypatch):
+    (tmp_path / "status.json").write_text(json.dumps({"pid": 123, "identity": {"pid": 123, "starttime": "old"}}))
+    monkeypatch.setattr(worker, "check_status", lambda *args: {"state": "running"})
+    monkeypatch.setattr(worker, "_identity", lambda pid: {"pid": pid, "starttime": "new"})
+    monkeypatch.setattr(worker.os, "killpg", lambda *args: pytest.fail("must not signal reused PID"), raising=False)
+    assert worker.cancel_worker(tmp_path, "trial")["state"] == "unknown"
+
+
+@pytest.mark.parametrize("model, expected", [
+    ("/custom/checkpoints/best.pt", "/custom/checkpoints/best.pt"),
+    ("  /custom/model with spaces.pt  ", "/custom/model with spaces.pt"),
+    (None, "/remote/remote-model.pt"),
+    ("   ", "/remote/remote-model.pt"),
+])
+def test_remote_training_model_override_precedes_task_default(setup_remote, model, expected):
+    service, config, _, _ = setup_remote
+    snapshot = service.prepare_remote_trial_request(config.experiment_id, "remote_001", pretrained=model)
+    assert snapshot["remote_model"] == expected
+
+
+def test_remote_launch_uses_explicit_model_in_worker_request(setup_remote):
+    service, config, _, _ = setup_remote
+    result = service.launch_remote_trial(config.experiment_id, remote_server_id="remote_001",
+                                         pretrained="/custom/checkpoints/best.pt")
+    trial = service.repo.get_trial(result["trial_id"])
+    request = json.loads((Path(trial.run_dir) / "request.json").read_text(encoding="utf-8"))
+    assert trial.model == "/custom/checkpoints/best.pt"
+    assert request["pretrained_model"] == "/custom/checkpoints/best.pt"

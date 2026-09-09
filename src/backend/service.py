@@ -1066,7 +1066,7 @@ class OrchestratorService:
                 local_dataset_yaml = found[0]
             elif not local_dataset_yaml.is_file():
                 raise ServiceError(f"local dataset YAML not found: {local_dataset_yaml}")
-        remote_model = str(remote_cfg.get("pretrained_model", "")).strip() or str(pretrained or "").strip()
+        remote_model = str(pretrained or "").strip() or str(remote_cfg.get("pretrained_model", "")).strip()
         remote_python = server.remote_python.strip()
         work_root = server.default_runs_root.strip()
         if not remote_python or not work_root:
@@ -1219,7 +1219,7 @@ class OrchestratorService:
             dataset_analysis = self._analyze_remote_dataset(client, remote_python, dataset_yaml, remote_dir)
             self.repo.update_trial(trial_id, dataset_analysis=dataset_analysis)
             command = (
-                f"nohup {shlex.quote(remote_python)} {shlex.quote(self._remote_join(remote_dir, 'remote_train_worker.py'))} "
+                f"nohup setsid {shlex.quote(remote_python)} {shlex.quote(self._remote_join(remote_dir, 'remote_train_worker.py'))} "
                 f"{shlex.quote(self._remote_join(remote_dir, 'request.json'))} > {shlex.quote(self._remote_join(remote_dir, 'stdout.log'))} "
                 f"2> {shlex.quote(self._remote_join(remote_dir, 'stderr.log'))} < /dev/null & echo $! > {shlex.quote(self._remote_join(remote_dir, 'pid'))}"
             )
@@ -1269,7 +1269,7 @@ class OrchestratorService:
             result = json.loads(self._exec_remote(client, command))
             if timed_out.is_set():
                 return {"state": "unknown", "error": "remote status check timed out"}
-            if result.get("state") not in {"running", "completed", "failed", "unknown"}:
+            if result.get("state") not in {"running", "completed", "failed", "cancelled", "unknown"}:
                 raise ServiceError("invalid remote status response")
             return {"state": result["state"], "error": str(result.get("error") or "")}
         except Exception as exc:
@@ -1454,13 +1454,17 @@ class OrchestratorService:
         remote_errors: list[str] = []
         for trial in trials:
             if trial.status in active_states:
+                process_terminated = cancel_training_process(trial.trial_id) or process_terminated
                 if trial.source == REMOTE_SOURCE and trial.remote_server_id:
                     try:
                         self.cancel_remote_trial(trial.trial_id)
                         process_terminated = True
                     except ServiceError as exc:
                         remote_errors.append(str(exc))
+                        continue
                 self.repo.update_trial(trial.trial_id, status=STATE_CANCELLED)
+        if remote_errors:
+            raise ServiceError("; ".join(remote_errors))
         self.repo.update_experiment_status(experiment_id, STATE_CANCELLED)
         self.repo.add_event(
             experiment_id,
@@ -1481,22 +1485,28 @@ class OrchestratorService:
         if trial.source != REMOTE_SOURCE or not trial.remote_server_id:
             raise ServiceError("trial is not a remotely managed trial")
         server = self.repo.get_remote_server(trial.remote_server_id)
-        client, sftp = self._open_sftp(server)
+        snapshot_path = Path(trial.run_dir) / "prepared_request.json"
+        remote_python = read_json(snapshot_path)["remote_python"] if snapshot_path.is_file() else server.remote_python
+        client = self._open_ssh(server, timeout=10)
+        deadline = threading.Timer(15.0, client.close)
+        deadline.daemon = True
+        deadline.start()
         try:
-            pid_path = self._remote_join(trial.remote_run_dir, "pid")
-            with sftp.open(pid_path, "r") as handle:
-                raw_pid = handle.read()
-            pid = int(raw_pid.decode() if isinstance(raw_pid, bytes) else str(raw_pid).strip())
-            if pid <= 1:
-                raise ValueError("invalid remote pid")
-            self._exec_remote(client, f"kill -- -{pid} 2>/dev/null || kill {pid} 2>/dev/null || true", check=False)
-        except (OSError, TypeError, ValueError) as exc:
-            raise ServiceError(f"failed to cancel remote trial: {exc}") from exc
+            from backend.core import remote_train_worker
+            source = Path(remote_train_worker.__file__).read_text(encoding="utf-8")
+            command = (f"{shlex.quote(remote_python)} -c {shlex.quote(source)} --cancel "
+                       f"{shlex.quote(trial.remote_run_dir)} {shlex.quote(trial_id)}")
+            result = json.loads(self._exec_remote(client, command))
+            if result.get("state") not in {"cancelled", "completed", "failed"}:
+                raise ServiceError(str(result.get("error") or "无法确认远程训练已停止"))
+        except Exception as exc:
+            raise ServiceError(f"停止远程训练失败：{exc}") from exc
         finally:
-            sftp.close()
+            deadline.cancel()
             client.close()
-        self.repo.update_trial(trial_id, remote_training_status=REMOTE_TRAINING_MAYBE_STOPPED, sync_error="cancelled by user")
-        return {"trial_id": trial_id, "cancelled": True}
+        if result["state"] == "cancelled":
+            self.repo.update_trial(trial_id, remote_training_status=REMOTE_TRAINING_MAYBE_STOPPED, sync_error="cancelled by user")
+        return {"trial_id": trial_id, "cancelled": result["state"] == "cancelled", "state": result["state"]}
 
     def delete_task(
         self,
@@ -1734,7 +1744,7 @@ class OrchestratorService:
                 task_type=config.task_type,
                 python_executable=self._python_for_yolo(),
                 src_root=str(Path(__file__).resolve().parent.parent),
-                process_key=experiment_id,
+                process_key=trial_id,
             )
             run_dir = training_result["run_dir"]
             previous_summary = None

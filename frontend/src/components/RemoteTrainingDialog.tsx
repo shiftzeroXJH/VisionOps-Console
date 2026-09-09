@@ -27,7 +27,7 @@ export function RemoteTrainingDialog({ experimentId, params, pretrained, note, o
   const willQueue = !!selectedQueue && (selectedQueue.running_count >= selectedQueue.max_parallel_training_tasks || selectedQueue.queued_count > 0 || selectedQueue.blocked)
   const [datasetRoot, setDatasetRoot] = useState('')
   const [datasetYaml, setDatasetYaml] = useState('')
-  const [remoteModel, setRemoteModel] = useState(pretrained.split(/[\\/]/).pop() || pretrained)
+  const [remoteModel, setRemoteModel] = useState(pretrained.trim())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [gpuStates, setGpuStates] = useState<Record<string, { data?: RemoteGpuStatus; error?: string; loading: boolean }>>({})
@@ -102,7 +102,7 @@ export function RemoteTrainingDialog({ experimentId, params, pretrained, note, o
     const cfg = detail.experiment.remote_configs?.[serverId] || {}
     setDatasetRoot(cfg.dataset_root || '')
     setDatasetYaml(cfg.dataset_yaml || '')
-    setRemoteModel(cfg.pretrained_model || (pretrained.split(/[\\/]/).pop() || pretrained))
+    setRemoteModel(pretrained.trim() || cfg.pretrained_model || '')
   }, [serverId, detail, pretrained])
 
   const submit = async () => {

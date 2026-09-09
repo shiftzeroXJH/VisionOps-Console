@@ -122,7 +122,7 @@ def test_launch_remote_trial_uploads_worker_and_persists_trial(tmp_path: Path, m
     assert trial.remote_run_dir == f"/remote/runs/experiments/{experiment_id}/{result['trial_id']}"
     uploaded_names = {Path(remote).name for _local, remote in sftp.uploads}
     assert {"request.json", "remote_train_worker.py", "yolo26n.pt"} <= uploaded_names
-    assert any("remote_train_worker.py" in command and "nohup" in command for command in client.commands)
+    assert any("remote_train_worker.py" in command and "nohup setsid " in command for command in client.commands)
 
 
 def test_launch_remote_trial_uploads_local_dataset_when_remote_paths_blank(tmp_path: Path, monkeypatch) -> None:
