@@ -174,14 +174,17 @@ export function OverlayViewer({
                       const label = box.confidence == null ? box.class_name : `${box.class_name} ${box.confidence.toFixed(2)}`
                       const labelWidth = Math.max(48, label.length * 8 + 8)
                       const anchor = box.polygon?.[0] || [box.x1, box.y1]
-                      const y = Math.max(16, anchor[1])
+                      const y = Math.max(17 / zoom, anchor[1])
                       return (
                         <g key={`${box.class_id}-${index}`}>
                           {box.polygon
                             ? <polygon points={box.polygon.map((point) => point.join(',')).join(' ')} fill="none" stroke={color} strokeWidth={3 / zoom} />
                             : <rect x={box.x1} y={box.y1} width={Math.max(0, box.x2 - box.x1)} height={Math.max(0, box.y2 - box.y1)} fill="none" stroke={color} strokeWidth={3 / zoom} />}
-                          <rect x={anchor[0]} y={y - 17} width={labelWidth} height={17} fill={color} />
-                          <text x={anchor[0] + 4} y={y - 4} fill="#fff" fontSize={12 / Math.max(0.7, zoom)}>{label}</text>
+                          {/* Keep the text, background and padding at fixed screen sizes. */}
+                          <g transform={`translate(${anchor[0]}, ${y}) scale(${1 / zoom})`}>
+                            <rect x={0} y={-17} width={labelWidth} height={17} fill={color} />
+                            <text x={4} y={-4} fill="#fff" fontSize={12}>{label}</text>
+                          </g>
                         </g>
                       )
                     })}
