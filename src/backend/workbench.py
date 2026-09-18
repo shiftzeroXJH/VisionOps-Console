@@ -18,7 +18,7 @@ from backend.utils import ensure_dir, read_json, write_json
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 MODEL_EXTENSIONS = {".pt", ".onnx"}
-WORKBENCH_TASK_TYPES = {"detection", "segment", "obb"}
+WORKBENCH_TASK_TYPES = {"detection", "segment", "obb", "semantic"}
 CACHE_TTL = timedelta(hours=24)
 
 
@@ -228,6 +228,7 @@ class WorkbenchService:
             raise WorkbenchError("image not found")
         item["roi"] = _normalize_roi(raw_roi, int(item["width"]), int(item["height"]))
         item["detections"] = []
+        item["semantic"] = None
         item["status"] = "pending"
         item["error"] = ""
         manifest["updated_at"] = _utc_now()
@@ -259,6 +260,7 @@ class WorkbenchService:
         item["revision"] = int(item.get("revision", 0)) + 1
         item["roi"] = None
         item["detections"] = []
+        item["semantic"] = None
         item["status"] = "pending"
         item["error"] = ""
         manifest["updated_at"] = _utc_now()
@@ -308,6 +310,7 @@ class WorkbenchService:
             worker_item = by_id.get(item["image_id"], {})
             item["status"] = worker_item.get("status", "failed")
             item["detections"] = worker_item.get("detections", [])
+            item["semantic"] = worker_item.get("semantic")
             item["error"] = worker_item.get("error", "inference returned no result")
         manifest["model"] = {"path": str(model_path), "source": payload.get("model_source", "local")}
         manifest["task_type"] = result.get("task_type") or payload.get("task_type")

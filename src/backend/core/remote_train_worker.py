@@ -183,6 +183,13 @@ def _save_per_class_metrics(request: dict, run_dir: Path) -> None:
 
 
 def _extract_per_class_metrics(result: object, task_type: str) -> list[dict]:
+    if task_type == "semantic":
+        names = getattr(result, "names", {})
+        ious = _numeric_list(getattr(result, "per_class_iou", None))
+        accuracies = _numeric_list(getattr(result, "per_class_pixel_accuracy", None))
+        return [{"class_id": int(i), "class_name": names.get(int(i), str(i)),
+                 "iou": _metric_value(ious, int(i)), "pixel_accuracy": _metric_value(accuracies, int(i))}
+                for i in getattr(result, "ap_class_index", [])]
     component_name = {"detection": "box", "segment": "seg", "obb": "obb"}.get(task_type, "box")
     component = getattr(result, component_name, None)
     if component is None:
@@ -313,7 +320,16 @@ def main() -> int:
         from ultralytics import YOLO
 
         params = dict(request["params"])
-        model = YOLO(request["pretrained_model"])
+        try:
+            from model_catalog import resolve_training_model, check_model_task, check_semantic_runtime, configure_amp_weights
+        except ImportError:
+            from backend.core.model_catalog import resolve_training_model, check_model_task, check_semantic_runtime, configure_amp_weights
+        check_semantic_runtime(request.get("task_type", "detection"))
+        models_dir = request.get("models_dir", run_dir.parent / "models")
+        if params.get("amp", True):
+            configure_amp_weights(run_dir, models_dir)
+        model = YOLO(resolve_training_model(request["pretrained_model"], models_dir))
+        check_model_task(model, request.get("task_type", "detection"), params)
         train_params = {
             "data": request["dataset_yaml"],
             "device": 0,

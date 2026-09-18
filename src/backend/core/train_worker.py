@@ -42,7 +42,14 @@ def _train(request: dict[str, Any]) -> None:
     params = dict(request["params"])
     run_path = Path(request["run_dir"])
     run_path.mkdir(parents=True, exist_ok=True)
-    model = YOLO(request["pretrained_model"])
+    from backend.core.model_catalog import resolve_training_model, check_model_task, check_semantic_runtime, configure_amp_weights
+    check_semantic_runtime(request.get("task_type", "detection"))
+    models_dir = Path(__file__).resolve().parents[1] / "models"
+    if params.get("amp", True):
+        configure_amp_weights(run_path, models_dir)
+    model_path = resolve_training_model(request["pretrained_model"], models_dir)
+    model = YOLO(model_path)
+    check_model_task(model, request.get("task_type", "detection"), params)
     platform_params = {
         "data": request["dataset_yaml"],
         "device": 0,
@@ -91,6 +98,13 @@ def _save_per_class_metrics(request: dict[str, Any], run_path: Path) -> None:
 
 
 def _extract_per_class_metrics(result: Any, task_type: str) -> list[dict[str, Any]]:
+    if task_type == "semantic":
+        names = _class_names(getattr(result, "names", {}))
+        ious = _numeric_list(getattr(result, "per_class_iou", None))
+        accuracy = _numeric_list(getattr(result, "per_class_pixel_accuracy", None))
+        return [{"class_id": i, "class_name": names.get(i, f"class_{i}"),
+                 "iou": _metric_value(ious, i), "pixel_accuracy": _metric_value(accuracy, i)}
+                for i in _class_indexes(getattr(result, "ap_class_index", None))]
     component_name = {"detection": "box", "segment": "seg", "obb": "obb"}.get(task_type, "box")
     component = getattr(result, component_name, None)
     if component is None:

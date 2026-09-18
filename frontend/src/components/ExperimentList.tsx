@@ -184,7 +184,7 @@ export function ExperimentList({ experiments, activeId, onSelect, onExperimentUp
                     {exp.best_metric && (
                       <div className="experiment-metrics">
                         <div className="metric-row">
-                          <span>最优 mAP50-95</span>
+                          <span>最优 {exp.task_type === 'semantic' ? 'mIoU' : 'mAP50-95'}</span>
                           <span className="font-mono">
                             {exp.best_metric.value.toFixed(4)}
                           </span>

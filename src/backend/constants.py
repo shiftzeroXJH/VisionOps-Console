@@ -29,6 +29,7 @@ YOLO_BASELINE: dict[str, Any] = {
 }
 
 TASK_BASELINES: dict[str, dict[str, Any]] = {
+    "semantic": dict(YOLO_BASELINE),
     "detection": dict(YOLO_BASELINE),
     "segment": dict(YOLO_BASELINE),
     "obb": dict(YOLO_BASELINE),

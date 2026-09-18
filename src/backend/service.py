@@ -368,14 +368,13 @@ def _compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 def _resolve_pretrained_model(pretrained: str) -> str:
+    from backend.core.model_catalog import OFFICIAL_NAMES
     normalized_pretrained = MODEL_FILENAME_ALIASES.get(pretrained.strip().lower(), pretrained)
+    if normalized_pretrained in OFFICIAL_NAMES:
+        return normalized_pretrained
     pretrained_path = Path(normalized_pretrained)
     if pretrained_path.is_absolute() and pretrained_path.exists():
         return str(pretrained_path.resolve())
-
-    package_model_path = Path(__file__).resolve().parent / "models" / normalized_pretrained
-    if package_model_path.exists():
-        return str(package_model_path.resolve())
 
     if pretrained_path.exists():
         return str(pretrained_path.resolve())
@@ -384,6 +383,9 @@ def _resolve_pretrained_model(pretrained: str) -> str:
 
 
 def _validate_pretrained_model(pretrained_model: str) -> None:
+    from backend.core.model_catalog import OFFICIAL_NAMES
+    if pretrained_model in OFFICIAL_NAMES:
+        return
     model_path = Path(pretrained_model)
     if not model_path.exists():
         return
@@ -818,11 +820,26 @@ class OrchestratorService:
         task_type: str,
         dataset_root: str,
         dataset_yaml: str | None,
-        pretrained: str,
+        pretrained: str | None = None,
+        model_family: str | None = None,
+        model_scale: str | None = None,
         save_root: str,
         initial_params: dict[str, Any] | None = None,
         remote_configs: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        from backend.core.model_catalog import select_model
+        task_type = "semantic" if task_type == "sem" else task_type
+        if task_type not in TASK_BASELINES:
+            raise ServiceError(f"unsupported task type: {task_type}")
+        if model_family is not None or model_scale is not None:
+            if pretrained is not None:
+                raise ServiceError("pretrained and model selection cannot be supplied together")
+            try:
+                pretrained = select_model(task_type, model_family, model_scale)
+            except ValueError as exc:
+                raise ServiceError(str(exc)) from exc
+        if not pretrained:
+            raise ServiceError("model selection is required")
         candidates = inspect_dataset(dataset_root)
         if dataset_yaml is None:
             if len(candidates) != 1:
@@ -888,7 +905,7 @@ class OrchestratorService:
                 if "QUEUED" in queue_statuses
                 else config.status
             )
-            metric = "map50_95"
+            metric = "miou" if config.task_type == "semantic" else "map50_95"
             best_trial_info = None
             best_value = None
             for trial in trials:
@@ -1067,6 +1084,11 @@ class OrchestratorService:
             elif not local_dataset_yaml.is_file():
                 raise ServiceError(f"local dataset YAML not found: {local_dataset_yaml}")
         remote_model = str(pretrained or "").strip() or str(remote_cfg.get("pretrained_model", "")).strip()
+        from backend.core.model_catalog import OFFICIAL_NAMES
+        if not remote_model and config.pretrained_model in OFFICIAL_NAMES:
+            remote_model = config.pretrained_model
+        if Path(remote_model).name in OFFICIAL_NAMES and Path(remote_model).parent == Path(__file__).resolve().parent / "models":
+            remote_model = Path(remote_model).name
         remote_python = server.remote_python.strip()
         work_root = server.default_runs_root.strip()
         if not remote_python or not work_root:
@@ -1200,6 +1222,7 @@ class OrchestratorService:
                 "run_dir": remote_dir,
                 "params": validation["normalized_params"],
                 "task_type": snapshot["task_type"],
+                "models_dir": self._remote_join(snapshot["default_runs_root"], "models"),
                 "trial_id": trial_id,
             }
             request_path = local_dir / "request.json"
@@ -1207,16 +1230,19 @@ class OrchestratorService:
             self._upload_remote_file(sftp, request_path, self._remote_join(remote_dir, "request.json"))
             worker_path = Path(__file__).resolve().parent / "core" / "remote_train_worker.py"
             self._upload_remote_file(sftp, worker_path, self._remote_join(remote_dir, "remote_train_worker.py"))
+            for helper in ("model_catalog.py", "semantic.py"):
+                self._upload_remote_file(sftp, worker_path.parent / helper, self._remote_join(remote_dir, helper))
             if amp_source.exists():
                 self._upload_remote_file(sftp, amp_source, self._remote_join(remote_dir, "yolo26n.pt"))
-            if model_check == "missing":
+            from backend.core.model_catalog import OFFICIAL_NAMES
+            if model_check == "missing" and remote_model not in OFFICIAL_NAMES:
                 local_model = _resolve_pretrained_model(snapshot["pretrained"])
                 fallback_remote = self._remote_join(remote_dir, "pretrained_model" + Path(local_model).suffix)
                 self._upload_remote_file(sftp, Path(local_model), fallback_remote)
                 request["pretrained_model"] = fallback_remote
                 write_json(request_path, request)
                 self._upload_remote_file(sftp, request_path, self._remote_join(remote_dir, "request.json"))
-            dataset_analysis = self._analyze_remote_dataset(client, remote_python, dataset_yaml, remote_dir)
+            dataset_analysis = self._analyze_remote_dataset(client, remote_python, dataset_yaml, remote_dir, snapshot["task_type"])
             self.repo.update_trial(trial_id, dataset_analysis=dataset_analysis)
             command = (
                 f"nohup setsid {shlex.quote(remote_python)} {shlex.quote(self._remote_join(remote_dir, 'remote_train_worker.py'))} "
@@ -1385,6 +1411,8 @@ class OrchestratorService:
 
         normalized: dict[str, Any] = {}
         errors: dict[str, str] = {}
+        if config.task_type == "semantic" and candidate.get("single_cls"):
+            errors["single_cls"] = "single_cls=True is not supported for semantic segmentation"
         warnings: list[str] = []
         has_extra_candidates = any(
             key not in SEARCH_SPACE and key not in PLATFORM_CONTROLLED_YOLO_PARAMS
@@ -1683,7 +1711,7 @@ class OrchestratorService:
         )
         trial_params = prepared["params"]
         trial_model = prepared["pretrained"]
-        dataset_analysis = analyze_dataset(config.dataset_yaml)
+        dataset_analysis = self._analyze_local_dataset(config)
         parent_trial = self.repo.get_trial(parent_trial_id) if parent_trial_id else None
         if parent_trial and parent_trial.experiment_id != experiment_id:
             raise ServiceError("continuation parent must belong to the same experiment")
@@ -2364,7 +2392,7 @@ class OrchestratorService:
         display_name = self._next_trial_display_name(experiment_id, trial_model, trial_params)
         trial_id = self.repo.next_trial_id()
         trial_dir = ensure_dir(Path(config.save_root) / "experiments" / experiment_id / display_name)
-        dataset_analysis = analyze_dataset(config.dataset_yaml)
+        dataset_analysis = self._analyze_local_dataset(config)
         previous_summary = None
         summaries = self.repo.recent_summaries(experiment_id, limit=1)
         if summaries:
@@ -2732,7 +2760,7 @@ class OrchestratorService:
     def compare_experiment(self, experiment_id: str) -> dict[str, Any]:
         config = self.repo.get_experiment(experiment_id)
         rows = [self._trial_row(trial) for trial in self.repo.list_trials(experiment_id)]
-        metric = "map50_95"
+        metric = "miou" if config.task_type == "semantic" else "map50_95"
         best_row = None
         best_value = None
         for row in rows:
@@ -2764,6 +2792,12 @@ class OrchestratorService:
             {"key": "params", "label": "Params"},
             {"key": "note", "label": "Note"},
         ]
+        if config.task_type == "semantic":
+            columns = [column for column in columns if column["key"] not in
+                       {"map50_95", "map50", "precision", "recall", "delta_map50_95"}]
+            columns[6:6] = [{"key": "miou", "label": "mIoU"},
+                            {"key": "pixel_accuracy", "label": "Pixel Accuracy"},
+                            {"key": "delta_miou", "label": "Delta mIoU"}]
         return {
             "experiment_id": experiment_id,
             "best_trial": None
@@ -2774,6 +2808,7 @@ class OrchestratorService:
                 "metric": metric,
                 "value": best_value,
             },
+            "task_type": config.task_type,
             "fitness_metric": fitness_metric(config.task_type),
             "columns": columns,
             "rows": rows,
@@ -2912,13 +2947,28 @@ class OrchestratorService:
     def _remote_join(self, remote_dir: str, filename: str) -> str:
         return posixpath.join(remote_dir.rstrip("/"), filename)
 
+    def _analyze_local_dataset(self, config):
+        if config.task_type != "semantic":
+            return analyze_dataset(config.dataset_yaml)
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent) + os.pathsep + env.get("PYTHONPATH", "")
+        process = subprocess.run([self._python_for_yolo(), "-m", "backend.core.semantic", config.dataset_yaml],
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+        if process.returncode:
+            raise ServiceError(process.stderr.strip() or "semantic dataset analysis failed")
+        return json.loads(process.stdout.strip().splitlines()[-1])
+
     def _analyze_remote_dataset(
-        self, client: Any, remote_python: str, dataset_yaml: str, remote_run_dir: str,
+        self, client: Any, remote_python: str, dataset_yaml: str, remote_run_dir: str, task_type: str = "detection",
     ) -> dict[str, Any]:
         """Run the shared, metadata-only analyzer where the dataset actually lives."""
         try:
             if not dataset_yaml:
                 raise ValueError("训练启动时缺少远程数据集路径，未生成统计快照")
+            if task_type == "semantic":
+                script = f"import sys,json; sys.path.insert(0, {remote_run_dir!r}); from semantic import analyze_semantic_dataset; print(json.dumps(analyze_semantic_dataset({dataset_yaml!r}), ensure_ascii=True))"
+                output = self._exec_remote(client, f"{shlex.quote(remote_python)} -c {shlex.quote(script)}")
+                return {**json.loads(output.strip().splitlines()[-1]), "source": "remote", "status": "completed", "captured_at": utc_now_iso()}
             source = (Path(__file__).resolve().parent / "core" / "dataset.py").read_text(encoding="utf-8")
             script = (
                 source + "\nimport json, os\n"
@@ -3273,6 +3323,17 @@ class OrchestratorService:
 
     def _trial_row(self, trial: TrialRecord) -> dict[str, Any]:
         summary = read_json(trial.summary_path) if trial.summary_path and Path(trial.summary_path).exists() else {}
+        if not trial.remote_server_id and trial.status in {STATE_TRAINING, STATE_RETRAINING, STATE_ANALYZING}:
+            try:
+                config = self.repo.get_experiment(trial.experiment_id)
+                summary = build_summary(
+                    trial.trial_id, config.task_type, trial.run_dir, trial.params,
+                    self._previous_summary_for_trial(trial.experiment_id, trial.trial_id),
+                ).to_dict()
+            except (OSError, ValueError, TypeError, KeyError):
+                # The worker may not have written its first complete CSV row yet.
+                # Live summaries are read-only; completion owns persisted artifacts.
+                pass
         final_metrics = summary.get("final_metrics", trial.metrics or {})
         metric_context = summary.get("metric_context", {})
         delta = summary.get("delta_vs_prev", {})
@@ -3300,6 +3361,9 @@ class OrchestratorService:
             "recall": final_metrics.get("recall"),
             "map50": final_metrics.get("map50"),
             "map50_95": final_metrics.get("map50_95"),
+            "miou": final_metrics.get("miou"),
+            "pixel_accuracy": final_metrics.get("pixel_accuracy"),
+            "delta_miou": delta.get("miou"),
             "fitness": metric_context.get("selection_fitness"),
             "fitness_metric": metric_context.get("selection_metric"),
             "delta_map50_95": delta.get("map50_95"),

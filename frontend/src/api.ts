@@ -134,7 +134,16 @@ export type WorkbenchRoi = {
   angle: number;
 };
 
+export type SemanticResult = {
+  width: number;
+  height: number;
+  mask_path: string;
+  layers: { class_id: number; class_name: string; pixels: number; ratio: number; url: string }[];
+};
+
 export type WorkbenchImage = {
+  semantic?: SemanticResult | null;
+  semantic_labels?: SemanticResult | null;
   image_id: string;
   name: string;
   width: number;

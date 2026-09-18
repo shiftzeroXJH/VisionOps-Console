@@ -7,11 +7,7 @@ interface Props {
   onCreated: (id: string) => void
 }
 
-const TASK_TYPES = [
-  { value: 'detection', label: '目标检测 (Detection)' },
-  { value: 'segment', label: '实例分割 (Segment)' },
-  { value: 'obb', label: '旋转框 (OBB)' },
-]
+type Catalog = { tasks: { value: string; label: string }[]; models: { task_type: string; model_family: string; model_scale: string; filename: string }[] }
 
 export function CreateExperimentDialog({ existingProjects, onClose, onCreated }: Props) {
   const [form, setForm] = useState({
@@ -19,11 +15,25 @@ export function CreateExperimentDialog({ existingProjects, onClose, onCreated }:
     project: '',
     task_type: 'detection',
     dataset_root: '',
-    pretrained: 'yolo26n.pt',
+    model_family: '26',
+    model_scale: 'n',
+    dataset_yaml: '',
     save_root: 'runs',
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [catalog, setCatalog] = useState<Catalog>({ tasks: [], models: [] })
+  const [yamlCandidates, setYamlCandidates] = useState<string[]>([])
+  useEffect(() => {
+    fetch('/api/model-catalog').then(async response => {
+      if (!response.ok) throw new Error('模型目录加载失败')
+      setCatalog(await response.json())
+    }).catch(error => setError(error.message))
+  }, [])
+  const taskModels = catalog.models.filter(model => model.task_type === form.task_type)
+  const families = [...new Set(taskModels.map(model => model.model_family))]
+  const scales = taskModels.filter(model => model.model_family === form.model_family)
+  const selectedModel = scales.find(model => model.model_scale === form.model_scale)
 
   const projectOptions = Array.from(new Set(existingProjects.filter(Boolean))).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
   const fallbackProject = (description: string) => {
@@ -62,10 +72,13 @@ export function CreateExperimentDialog({ existingProjects, onClose, onCreated }:
         project: form.project.trim() || fallbackProject(form.description),
         task_type: form.task_type,
         dataset_root: form.dataset_root,
-        pretrained: form.pretrained,
+        model_family: form.model_family,
+        model_scale: form.model_scale,
+        dataset_yaml: form.dataset_yaml || undefined,
         save_root: form.save_root,
       }
       const res = await api.createExperiment(payload)
+      if (res.status === 'needs_dataset_yaml') setYamlCandidates(res.yaml_candidates || [])
       if (res.experiment_id) {
         onCreated(res.experiment_id)
         return
@@ -111,18 +124,27 @@ export function CreateExperimentDialog({ existingProjects, onClose, onCreated }:
           <div className="flex gap-4">
             <div className="flex-col gap-2 w-full">
               <label style={{ fontSize: '0.875rem' }}>任务类型 (Task Type)</label>
-              <select className="input" value={form.task_type} onChange={(e) => setForm({ ...form, task_type: e.target.value })}>
-                {TASK_TYPES.map((t) => (
+              <select className="input" value={form.task_type} onChange={(e) => {
+                const task_type = e.target.value
+                const compatible = catalog.models.some(model => model.task_type === task_type && model.model_family === form.model_family)
+                setForm({ ...form, task_type, model_family: compatible ? form.model_family : '26' })
+              }}>
+                {catalog.tasks.map((t) => (
                   <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
               </select>
             </div>
             <div className="flex-col gap-2 w-full">
               <label style={{ fontSize: '0.875rem' }}>数据集目录 (Dataset Root)</label>
-              <input required className="input" value={form.dataset_root} onChange={(e) => setForm({ ...form, dataset_root: e.target.value })} placeholder="C:/datasets/my_dataset" />
+              <input required className="input" value={form.dataset_root} onChange={(e) => { setForm({ ...form, dataset_root: e.target.value, dataset_yaml: '' }); setYamlCandidates([]) }} placeholder="C:/datasets/my_dataset" />
             </div>
           </div>
 
+          {yamlCandidates.length > 0 && <label>数据集 YAML<select required className="input" value={form.dataset_yaml} onChange={e => setForm({ ...form, dataset_yaml: e.target.value })}><option value="">选择 YAML</option>{yamlCandidates.map(path => <option key={path} value={path}>{path}</option>)}</select></label>}
+          <div className="flex gap-4">
+            <label className="flex-col gap-2 w-full">YOLO 系列<select className="input" value={form.model_family} onChange={e => setForm({ ...form, model_family: e.target.value })}>{families.map(family => <option key={family} value={family}>{family === 'v8' ? 'YOLOv8' : `YOLO${family}`}</option>)}</select></label>
+            <label className="flex-col gap-2 w-full">模型规格<select className="input" value={form.model_scale} onChange={e => setForm({ ...form, model_scale: e.target.value })}>{scales.map(model => <option key={model.model_scale} value={model.model_scale}>{model.model_scale}</option>)}</select></label>
+          </div>
           <div className="flex gap-4">
             <div className="flex-col gap-2 w-full">
               <label style={{ fontSize: '0.875rem' }}>保存目录 (Save Root)</label>
@@ -130,13 +152,13 @@ export function CreateExperimentDialog({ existingProjects, onClose, onCreated }:
             </div>
             <div className="flex-col gap-2 w-full">
               <label style={{ fontSize: '0.875rem' }}>初始模型 (Model)</label>
-              <input required className="input" value={form.pretrained} onChange={(e) => setForm({ ...form, pretrained: e.target.value })} />
+              <output className="input font-mono" style={{ overflowWrap: 'anywhere' }}>{selectedModel?.filename || '-'}</output>
             </div>
           </div>
 
           <div className="flex justify-end gap-2 mt-4 pt-4" style={{ borderTop: '1px solid var(--panel-border)' }}>
             <button type="button" className="btn" onClick={onClose}>取消</button>
-            <button type="submit" className="btn btn-primary" disabled={loading}>
+            <button type="submit" className="btn btn-primary" disabled={loading || !selectedModel}>
               {loading ? '正在创建...' : '创建实验'}
             </button>
           </div>

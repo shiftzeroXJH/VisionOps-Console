@@ -29,6 +29,8 @@ TASK_ALIASES = {
     "detection": "detection",
     "seg": "segment",
     "segment": "segment",
+    "semantic": "semantic",
+    "sem": "semantic",
     "obb": "obb",
 }
 
@@ -68,6 +70,8 @@ def _normalize_task_type(raw: Any) -> str | None:
 def _filename_task_hint(model_path: str) -> str | None:
     stem = Path(model_path).stem.lower().replace("_", "-")
     tokens = {token for token in stem.split("-") if token}
+    if "sem" in tokens or "semantic" in tokens:
+        return "semantic"
     if "obb" in tokens:
         return "obb"
     if "seg" in tokens or "segment" in tokens:
@@ -79,11 +83,18 @@ def _load_model(model_path: str, requested_task: Any = None) -> tuple[Any, str]:
     from ultralytics import YOLO
 
     task_hint = _normalize_task_type(requested_task) or _filename_task_hint(model_path)
+    if task_hint is None and str(model_path).lower().endswith(".onnx"):
+        try:
+            import onnxruntime as ort
+            metadata = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"]).get_modelmeta().custom_metadata_map
+            task_hint = _normalize_task_type(metadata.get("task"))
+        except ImportError:
+            pass
     # Explicit task hints are important for ONNX files, whose metadata may not
     # contain the original Ultralytics task.
     model = YOLO(model_path, task={"detection": "detect"}.get(task_hint, task_hint)) if task_hint else YOLO(model_path)
     task = _normalize_task_type(getattr(model, "task", "")) or task_hint or "detection"
-    if task not in {"detection", "segment", "obb"}:
+    if task not in {"detection", "segment", "obb", "semantic"}:
         raise RuntimeError(f"unsupported workbench model task: {task}")
     return model, task
 
@@ -170,6 +181,8 @@ def run_inference(request: dict[str, Any]) -> dict[str, Any]:
                 "save": False,
                 "verbose": False,
             }
+            if task_type == "semantic":
+                predict_args.pop("conf", None)
             if effective_imgsz is not None:
                 predict_args["imgsz"] = effective_imgsz
             prediction = (
@@ -179,6 +192,14 @@ def run_inference(request: dict[str, Any]) -> dict[str, Any]:
             )
             result = prediction[0]
             names = _names(getattr(result, "names", model_names)) or model_names
+            if task_type == "semantic":
+                from backend.core.semantic import serialize_mask, display_names
+                with Image.open(item["path"]) as original:
+                    size = original.size
+                record["semantic"] = serialize_mask(result.semantic_mask.data, names,
+                    Path(item["path"]).parent.parent / "semantic" / (item["image_id"] + ".png"),
+                    size, normalized_roi, crop_size)
+                names = display_names(names)
             detections = _serialize_boxes(result, names, task_type)
             record["detections"] = (
                 [_map_roi_detection(detection, normalized_roi, crop_size) for detection in detections]
@@ -314,11 +335,21 @@ def inspect_evaluation_dataset(dataset_path: Path) -> dict[str, Any]:
 
 def run_evaluation(request: dict[str, Any]) -> dict[str, Any]:
     dataset_path = Path(request["dataset_path"]).resolve()
-    inspection = inspect_evaluation_dataset(dataset_path)
     model, task_type = _load_model(request["model_path"], request.get("task_type"))
+    if task_type == "semantic":
+        if not dataset_path.is_file() or dataset_path.suffix.lower() not in {".yaml", ".yml"}:
+            raise RuntimeError("Semantic evaluation requires a dataset YAML with PNG masks or YOLO polygons")
+        from backend.core.semantic import semantic_dataset, display_names
+        dataset, data = semantic_dataset(dataset_path)
+        inspection = {"dataset_type": "yolo", "dataset_yaml": str(dataset_path), "dataset_root": str(data["path"]),
+                      "image_count": len(dataset.labels), "classes": _class_rows(display_names(data["names"]))}
+    else:
+        inspection = inspect_evaluation_dataset(dataset_path)
     model_names = _names(getattr(model, "names", {}))
     if not model_names:
         raise RuntimeError("model has no usable class metadata")
+    if task_type == "semantic":
+        return _evaluate_semantic(request, model, inspection)
 
     adapter_dir: Path | None = None
     if inspection["dataset_type"] == "yolo":
@@ -397,6 +428,33 @@ def run_evaluation(request: dict[str, Any]) -> dict[str, Any]:
     finally:
         if adapter_dir is not None:
             shutil.rmtree(adapter_dir, ignore_errors=True)
+
+
+def _evaluate_semantic(request, model, inspection):
+    from backend.core.semantic import label_masks, serialize_mask
+    if inspection["dataset_type"] != "yolo":
+        raise RuntimeError("Semantic evaluation requires a dataset YAML with PNG masks or YOLO polygons")
+    yaml_path = inspection["dataset_yaml"]
+    masks, names = label_masks(yaml_path)
+    from backend.core.semantic import display_names
+    _validate_class_names(display_names(_names(model.names)), names)
+    validation = model.val(data=yaml_path, split="val", imgsz=int(request["imgsz"]),
+                           batch=int(request["batch"]), workers=0, plots=False, save=False, verbose=False)
+    output_dir = Path(inspection["dataset_root"]) / "predictions_xml" / request["evaluation_id"]
+    output_dir.mkdir(parents=True, exist_ok=False)
+    images = []
+    for index, (path, mask) in enumerate(masks.items()):
+        image_id = f"eval_img_{index:06d}"
+        prediction = model.predict(source=path, imgsz=int(request["imgsz"]), save=False, verbose=False)[0]
+        labels = serialize_mask(mask, names, output_dir / f"{image_id}_label.png")
+        semantic = serialize_mask(prediction.semantic_mask.data, _names(prediction.names), output_dir / f"{image_id}_predict.png")
+        images.append({"image_id": image_id, "name": Path(path).name, "source_path": path,
+                       "width": labels["width"], "height": labels["height"], "labels": [], "detections": [],
+                       "semantic": semantic, "semantic_labels": labels})
+    return {"task_type": "semantic", "dataset": inspection, "classes": _class_rows(names),
+            "metrics": _extract_metrics(validation, "semantic"),
+            "per_class_metrics": _extract_per_class_metrics(validation, "semantic"),
+            "images": images, "predictions_dir": str(output_dir)}
 
 
 def _serialize_boxes(result: Any, names: dict[int, str], task_type: str | None = None) -> list[dict[str, Any]]:

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivitySquare, CheckCircle2, ChevronDown, ChevronUp, FolderOpen, History, Home, ImagePlus, Loader2, Play, PlayCircle, ScanSearch, Settings, Trash2 } from 'lucide-react'
-import { api, type Detection, type WorkbenchImage, type WorkbenchModel, type WorkbenchRoi } from '../api'
+import { api, type Detection, type WorkbenchImage, type WorkbenchModel, type WorkbenchRoi, type SemanticResult } from '../api'
 import { ModelSelector, type ModelSelection } from './ModelSelector'
 import { OverlayViewer } from './OverlayViewer'
 import { SettingsDialog } from './SettingsDialog'
@@ -11,7 +11,7 @@ const defaultModel: ModelSelection = { model_source: 'platform', trial_id: '', c
 type ClassInfo = { class_id: number; class_name: string }
 type InferenceSession = { session_id: string; images: WorkbenchImage[]; classes: ClassInfo[]; task_type?: string | null }
 type DatasetInspection = { dataset_type: string; image_count: number; classes: Array<{ class_id?: number; class_name: string }> }
-type MetricRow = ClassInfo & { map50?: number; map50_95?: number; precision?: number; recall?: number }
+type MetricRow = ClassInfo & { map50?: number; map50_95?: number; precision?: number; recall?: number; iou?: number; pixel_accuracy?: number }
 type EvaluationResult = {
   evaluation_id: string
   images: WorkbenchImage[]
@@ -142,7 +142,7 @@ const errorMessage = (error: unknown, fallback: string) => {
   return value.detail?.error || value.message || fallback
 }
 
-function ClassFilter({ classes, boxes, visible, onChange }: { classes: ClassInfo[]; boxes: Detection[]; visible: Set<number>; onChange: (next: Set<number>) => void }) {
+function ClassFilter({ classes, boxes, visible, onChange, semantic, semanticTask = false }: { classes: ClassInfo[]; boxes: Detection[]; visible: Set<number>; onChange: (next: Set<number>) => void; semantic?: SemanticResult | null; semanticTask?: boolean }) {
   const counts = useMemo(() => {
     const next = new Map<number, number>()
     boxes.forEach((box) => next.set(box.class_id, (next.get(box.class_id) || 0) + 1))
@@ -154,7 +154,7 @@ function ClassFilter({ classes, boxes, visible, onChange }: { classes: ClassInfo
       <div className="class-panel-title">
         <span>类别</span>
         <div className="class-panel-actions">
-          <span>{boxes.length} 个目标</span>
+          <span>{semanticTask ? `${classes.length} 类` : `${boxes.length} 个目标`}</span>
           <label title={allVisible ? '隐藏所有类别' : '显示所有类别'}>
             <input
               type="checkbox"
@@ -177,9 +177,9 @@ function ClassFilter({ classes, boxes, visible, onChange }: { classes: ClassInfo
               else next.delete(item.class_id)
               onChange(next)
             }} />
-            <span className="class-swatch" style={{ background: `hsl(${(item.class_id * 67 + 145) % 360} 68% 48%)` }} />
+            <span className="class-swatch" style={{ background: semanticTask ? ['#22c55e', '#38bdf8', '#f59e0b', '#f43f5e', '#a78bfa', '#14b8a6'][item.class_id % 6] : `hsl(${(item.class_id * 67 + 145) % 360} 68% 48%)` }} />
             <span title={item.class_name}>{item.class_name}</span>
-            <strong className="font-mono">{counts.get(item.class_id) || 0}</strong>
+            <strong className="font-mono" title={semantic ? `${semantic.layers.find(layer => layer.class_id === item.class_id)?.pixels || 0} pixels` : undefined}>{semantic ? `${((semantic.layers.find(layer => layer.class_id === item.class_id)?.ratio || 0) * 100).toFixed(1)}%` : counts.get(item.class_id) || 0}</strong>
           </label>
         ))}
         {!classes.length && <div className="workbench-empty-small">运行模型后显示类别</div>}
@@ -251,7 +251,7 @@ export function ModelWorkbench({ tab }: Props) {
         return {
           ...current,
           checkpoint_name: current.checkpoint_name || selected.default_checkpoint,
-          task_type: current.task_type === 'auto' && (taskType === 'detection' || taskType === 'segment' || taskType === 'obb')
+          task_type: current.task_type === 'auto' && (taskType === 'detection' || taskType === 'segment' || taskType === 'obb' || taskType === 'semantic')
             ? taskType
             : current.task_type,
         }
@@ -372,7 +372,7 @@ function InferenceView({ models, model, onModelChange }: { models: WorkbenchMode
     setSession((previous) => previous ? {
       ...previous,
       images: previous.images.map((item) => item.image_id === current.image_id
-        ? { ...item, roi: nextRoi, detections: [], status: 'pending', error: '' }
+        ? { ...item, roi: nextRoi, detections: [], semantic: null, status: 'pending', error: '' }
         : item),
     } : previous)
     if (roiSaveTimer.current !== null) window.clearTimeout(roiSaveTimer.current)
@@ -400,7 +400,7 @@ function InferenceView({ models, model, onModelChange }: { models: WorkbenchMode
     <div className="workbench-body">
       <div className="workbench-toolbar">
         <ModelSelector models={models} value={model} disabled={busy} onChange={onModelChange} />
-        <label className="compact-field">conf<input className="input font-mono" type="number" min="0.001" max="1" step="0.01" value={conf} onChange={(event) => setConf(Number(event.target.value))} /></label>
+        {model.task_type !== 'semantic' && session?.task_type !== 'semantic' && <label className="compact-field">conf<input className="input font-mono" type="number" min="0.001" max="1" step="0.01" value={conf} onChange={(event) => setConf(Number(event.target.value))} /></label>}
         <label className="compact-field">imgsz<input className="input font-mono" type="number" min="32" max="4096" step="32" value={imgsz} disabled={autoImgsz} onChange={(event) => setImgsz(Number(event.target.value))} /></label>
         <label className="switch-field" title="使用模型 checkpoint 中保存的 imgsz"><input type="checkbox" checked={autoImgsz} onChange={(event) => setAutoImgsz(event.target.checked)} />自动</label>
         <input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => { void upload(Array.from(event.target.files || [])); event.target.value = '' }} />
@@ -412,9 +412,9 @@ function InferenceView({ models, model, onModelChange }: { models: WorkbenchMode
       <div ref={setGridRef} className="workbench-main-grid" style={{ '--image-rail-width': `${widths.left}px`, '--class-panel-width': `${widths.right}px` } as React.CSSProperties}>
         <ImageRail images={images} currentId={current?.image_id || ''} imageUrl={url} onSelect={setCurrentId} selectedIds={selectedIds} onSelectionChange={setSelectedIds} onDeleteSelected={() => void deleteSelected()} deleteDisabled={busy} />
         <main className="viewer-region">
-          {current ? <OverlayViewer imageUrl={url(current)} imageName={current.name} width={current.width} height={current.height} layers={[{ title: current.roi ? 'Original + ROI Predict' : 'Original + Predict', boxes: current.detections || [] }]} visibleClasses={visible} showResults roi={current.roi} onRoiChange={updateRoi} onRotateLeft={() => void rotateCurrent('counterclockwise')} onRotateRight={() => void rotateCurrent('clockwise')} controlsDisabled={busy} /> : <EmptyState icon={<ImagePlus size={34} />} text="导入图片后开始推理" />}
+          {current ? <OverlayViewer imageUrl={url(current)} imageName={current.name} width={current.width} height={current.height} layers={[{ title: current.roi ? 'Original + ROI Predict' : 'Original + Predict', boxes: current.detections || [], semantic: current.semantic }]} visibleClasses={visible} showResults roi={current.roi} onRoiChange={updateRoi} onRotateLeft={() => void rotateCurrent('counterclockwise')} onRotateRight={() => void rotateCurrent('clockwise')} controlsDisabled={busy} /> : <EmptyState icon={<ImagePlus size={34} />} text="导入图片后开始推理" />}
         </main>
-        <ClassFilter classes={session?.classes || []} boxes={current?.detections || []} visible={visible} onChange={setVisible} />
+        <ClassFilter classes={session?.classes || []} boxes={current?.detections || []} semantic={current?.semantic} semanticTask={model.task_type === 'semantic' || session?.task_type === 'semantic'} visible={visible} onChange={setVisible} />
         <SidebarResizeHandles widths={widths} {...resizeHandlers} />
       </div>
     </div>
@@ -462,7 +462,7 @@ function EvaluationView({ models, model, onModelChange, initialDatasetPath, init
       if (typeof loaded.conf === 'number') setConf(loaded.conf)
       if (typeof loaded.imgsz === 'number') setImgsz(loaded.imgsz)
       if (typeof loaded.batch === 'number') setBatch(loaded.batch)
-      const taskType = loaded.task_type === 'detection' || loaded.task_type === 'segment' || loaded.task_type === 'obb' ? loaded.task_type : 'auto'
+      const taskType = loaded.task_type === 'detection' || loaded.task_type === 'segment' || loaded.task_type === 'obb' || loaded.task_type === 'semantic' ? loaded.task_type : 'auto'
       onModelChange(loaded.model_source === 'platform'
         ? { model_source: 'platform', trial_id: loaded.trial_id || '', checkpoint_name: loaded.checkpoint_name || '', model_path: '', task_type: taskType }
         : { model_source: 'local', trial_id: '', checkpoint_name: '', model_path: loaded.model_path || '', task_type: taskType })
@@ -500,7 +500,7 @@ function EvaluationView({ models, model, onModelChange, initialDatasetPath, init
             {evaluationHistory.map((item) => <option key={item.evaluation_id} value={item.evaluation_id}>{evaluationHistoryLabel(item)}</option>)}
           </select></span>
         </label>
-        <label className="compact-field">结果 conf<input className="input font-mono" type="number" min="0.001" max="1" step="0.01" value={conf} onChange={(event) => setConf(Number(event.target.value))} /></label>
+        {model.task_type !== 'semantic' && result?.task_type !== 'semantic' && <label className="compact-field">结果 conf<input className="input font-mono" type="number" min="0.001" max="1" step="0.01" value={conf} onChange={(event) => setConf(Number(event.target.value))} /></label>}
         <label className="compact-field">imgsz<input className="input font-mono" type="number" min="32" step="32" value={imgsz} onChange={(event) => setImgsz(Number(event.target.value))} /></label>
         <label className="compact-field">batch<input className="input font-mono" type="number" min="1" value={batch} onChange={(event) => setBatch(Number(event.target.value))} /></label>
         <button className="btn" disabled={busy || !datasetPath} onClick={() => void inspect()}><FolderOpen size={16} /> 检查</button>
@@ -512,9 +512,9 @@ function EvaluationView({ models, model, onModelChange, initialDatasetPath, init
       <div ref={setGridRef} className="workbench-main-grid" style={{ '--image-rail-width': `${widths.left}px`, '--class-panel-width': `${widths.right}px` } as React.CSSProperties}>
         <ImageRail images={images} currentId={current?.image_id || ''} imageUrl={url} onSelect={setCurrentId} />
         <main className="viewer-region">
-          {current ? <OverlayViewer imageUrl={url(current)} imageName={current.name} width={current.width} height={current.height} layers={[{ title: 'Label', boxes: current.labels || [], color: '#22c55e' }, { title: 'Predict', boxes: current.detections || [], color: '#f97316' }]} visibleClasses={visible} showResults /> : <EmptyState icon={<ScanSearch size={34} />} text="选择模型和验证集后开始评估" />}
+          {current ? <OverlayViewer imageUrl={url(current)} imageName={current.name} width={current.width} height={current.height} layers={[{ title: 'Label', boxes: current.labels || [], semantic: current.semantic_labels, color: '#22c55e' }, { title: 'Predict', boxes: current.detections || [], semantic: current.semantic, color: '#f97316' }]} visibleClasses={visible} showResults /> : <EmptyState icon={<ScanSearch size={34} />} text="选择模型和验证集后开始评估" />}
         </main>
-        <ClassFilter classes={result?.classes || []} boxes={allBoxes} visible={visible} onChange={setVisible} />
+        <ClassFilter classes={result?.classes || []} boxes={allBoxes} semantic={current?.semantic} semanticTask={model.task_type === 'semantic' || result?.task_type === 'semantic'} visible={visible} onChange={setVisible} />
         <SidebarResizeHandles widths={widths} {...resizeHandlers} />
       </div>
     </div>
@@ -528,7 +528,8 @@ function evaluationHistoryLabel(item: EvaluationSummary) {
 }
 
 function MetricsBand({ result, expanded, onToggle }: { result: EvaluationResult; expanded: boolean; onToggle: () => void }) {
-  const labels: Record<string, string> = { map50: 'mAP50', map50_95: 'mAP50-95', precision: 'Precision', recall: 'Recall' }
+  const labels: Record<string, string> = result.task_type === 'semantic' ? { miou: 'mIoU', pixel_accuracy: 'Pixel Accuracy' } : { map50: 'mAP50', map50_95: 'mAP50-95', precision: 'Precision', recall: 'Recall' }
+  const classMetrics: (keyof MetricRow)[] = result.task_type === 'semantic' ? ['iou', 'pixel_accuracy'] : ['map50', 'map50_95', 'precision', 'recall']
   return (
     <section className={`metrics-band ${expanded ? '' : 'collapsed'}`}>
       <header className="metrics-band-header">
@@ -540,11 +541,11 @@ function MetricsBand({ result, expanded, onToggle }: { result: EvaluationResult;
       {expanded && <>
         <div className="metric-summary">
           {Object.entries(labels).map(([key, label]) => <div key={key}><span>{label}</span><strong className="font-mono">{typeof result.metrics?.[key] === 'number' ? result.metrics[key].toFixed(4) : '-'}</strong></div>)}
-          <p title={result.predictions_dir}>XML：<span className="font-mono">{result.predictions_dir}</span></p>
+          <p title={result.predictions_dir}>{result.task_type === 'semantic' ? 'PNG' : 'XML'}：<span className="font-mono">{result.predictions_dir}</span></p>
         </div>
         <div className="metric-table-wrap">
-          <table><thead><tr><th>类别</th><th className="font-mono">mAP50</th><th className="font-mono">mAP50-95</th><th className="font-mono">Precision</th><th className="font-mono">Recall</th></tr></thead>
-            <tbody>{(result.per_class_metrics || []).map((row) => <tr key={row.class_id}><td>{row.class_name}</td><td className="font-mono">{formatMetric(row.map50)}</td><td className="font-mono">{formatMetric(row.map50_95)}</td><td className="font-mono">{formatMetric(row.precision)}</td><td className="font-mono">{formatMetric(row.recall)}</td></tr>)}</tbody>
+          <table><thead><tr><th>类别</th>{classMetrics.map(key => <th key={key}>{labels[key] || key}</th>)}</tr></thead>
+            <tbody>{(result.per_class_metrics || []).map((row) => <tr key={row.class_id}><td>{row.class_name}</td>{classMetrics.map(key => <td key={key} className="font-mono">{formatMetric(row[key])}</td>)}</tr>)}</tbody>
           </table>
         </div>
       </>}

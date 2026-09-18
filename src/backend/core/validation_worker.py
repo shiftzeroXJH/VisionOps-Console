@@ -50,7 +50,7 @@ def run_validation_preview(request: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("dataset yaml has no val split")
     image_dir = _resolve_split_path(base_path, dataset_yaml.parent, split_value)
     label_dir = _resolve_label_dir(image_dir, split_value)
-    if not image_dir.exists():
+    if request["task_type"] != "semantic" and not image_dir.exists():
         raise RuntimeError(f"val image dir not found: {image_dir}")
 
     image_limit = int(request["image_limit"])
@@ -60,6 +60,10 @@ def run_validation_preview(request: dict[str, Any]) -> dict[str, Any]:
     names = _normalize_names(dataset_config.get("names"))
     output_dir = Path(request["output_dir"]).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    semantic_masks = None
+    if request["task_type"] == "semantic":
+        from backend.core.semantic import label_masks
+        semantic_masks, names = label_masks(dataset_yaml)
 
     model = YOLO(request["model_path"])
     metrics = _extract_metrics(
@@ -78,6 +82,8 @@ def run_validation_preview(request: dict[str, Any]) -> dict[str, Any]:
     image_paths = sorted(
         path for path in image_dir.rglob("*") if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
     )[:image_limit]
+    if semantic_masks is not None:
+        image_paths = [Path(path) for path in semantic_masks][:image_limit]
     rendered: list[dict[str, Any]] = []
     for index, image_path in enumerate(image_paths, start=1):
         label_path = _label_path_for_image(image_path, image_dir, label_dir)
@@ -85,7 +91,11 @@ def run_validation_preview(request: dict[str, Any]) -> dict[str, Any]:
             base = opened.convert("RGB")
         label_image = base.copy()
         predict_image = base.copy()
-        _draw_label_file(label_image, label_path, names, request["task_type"])
+        if semantic_masks is not None:
+            from backend.core.semantic import overlay_mask
+            overlay_mask(label_image, semantic_masks[str(image_path.resolve())])
+        else:
+            _draw_label_file(label_image, label_path, names, request["task_type"])
         prediction = model.predict(
             source=str(image_path),
             imgsz=imgsz,
@@ -93,7 +103,10 @@ def run_validation_preview(request: dict[str, Any]) -> dict[str, Any]:
             verbose=False,
             save=False,
         )[0]
-        _draw_prediction(predict_image, prediction, names, request["task_type"])
+        if semantic_masks is not None:
+            overlay_mask(predict_image, prediction.semantic_mask.data)
+        else:
+            _draw_prediction(predict_image, prediction, names, request["task_type"])
         base_filename = f"{index:04d}_{_safe_stem(image_path.stem)}"
         label_filename = f"{base_filename}_label.jpg"
         predict_filename = f"{base_filename}_predict.jpg"
@@ -115,6 +128,10 @@ def run_validation_preview(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract_metrics(result: Any, task_type: str) -> dict[str, float]:
+    if task_type == "semantic":
+        return {key: float(value) for key, value in
+                (("miou", getattr(result, "miou", None)), ("pixel_accuracy", getattr(result, "pixel_accuracy", None)))
+                if value is not None and math.isfinite(float(value))}
     primary_component = {
         "segment": "seg",
         "obb": "obb",

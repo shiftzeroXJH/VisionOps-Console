@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import math
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,8 @@ def _safe_float(value: Any) -> float | None:
     try:
         if value in ("", None):
             return None
-        return float(value)
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else None
     except (TypeError, ValueError):
         return None
 
@@ -134,6 +136,40 @@ def _plateau(
     return False, None
 
 
+def _semantic_summary(trial_id, run_path, rows, params, previous_summary):
+    scored = [(row, calculate_fitness(row, "semantic")) for row in rows]
+    valid = [(row, value) for row, value in scored if value is not None]
+    best, fitness = max(valid, key=lambda item: item[1]) if valid else (rows[-1], None)
+    metrics = {"miou": _column_value(best, ("metrics/mIoU",)),
+               "pixel_accuracy": _column_value(best, ("metrics/pixel_acc",))}
+    previous = (previous_summary or {}).get("final_metrics", {})
+    delta = {key: round(value - previous[key], 6)
+             if value is not None and isinstance(previous.get(key), (float, int)) else None
+             for key, value in metrics.items()}
+    loss_columns = tuple(key for key in rows[-1] if key.startswith("train/") and "loss" in key)
+    total_time = _column_value(rows[-1], ("time",))
+    # Reuse the trend checks with mIoU as their score, without publishing detection metrics.
+    trend_rows = [{**row, "metrics/mAP50-95": row.get("metrics/mIoU")} for row in rows]
+    plateau, plateau_epoch = _plateau(trend_rows, ("",))
+    overfitting = _detect_overfitting(trend_rows, loss_columns, ("",))
+    return Summary(
+        trial_id=trial_id,
+        basic_info={"epochs_planned": params["epochs"], "epochs_completed": len(rows),
+                    "early_stop": len(rows) < int(params["epochs"]), "best_epoch": int(best["epoch"]),
+                    "train_time_sec": total_time},
+        metric_context={"task_type": "semantic", "primary_component": "semantic",
+                        "available_components": ["semantic"], "selection_metric": "mIoU", "selection_fitness": fitness},
+        final_metrics=metrics, per_class_metrics=_load_per_class_metrics(run_path),
+        metric_breakdown={"semantic": metrics}, delta_vs_prev=delta,
+        metric_breakdown_delta_vs_prev={"semantic": delta},
+        training_dynamics={"loss_trend": _loss_trend(rows, loss_columns), "plateau": plateau,
+                           "plateau_epoch": plateau_epoch, "overfitting": overfitting, "primary_component": "semantic"},
+        warnings=["possible_overfitting"] if overfitting != "none" else [],
+        resource={"avg_epoch_time": total_time / len(rows) if total_time is not None else None,
+                  "gpu_mem_peak": _column_value(best, ("gpu_mem",))}, params=params,
+    )
+
+
 def build_summary(
     trial_id: str,
     task_type: str,
@@ -149,6 +185,9 @@ def build_summary(
     rows = _load_results_rows(results_csv)
     if not rows:
         raise ValueError("results.csv is empty")
+
+    if task_type == "semantic":
+        return _semantic_summary(trial_id, run_path, rows, params, previous_summary)
 
     profile = TASK_METRIC_PROFILES.get(task_type, TASK_METRIC_PROFILES["detection"])
     primary_component = profile["primary_component"]

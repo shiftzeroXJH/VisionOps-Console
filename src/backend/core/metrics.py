@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from typing import Any
+import math
 
 
 TASK_METRIC_PROFILES: dict[str, dict[str, Any]] = {
+    "semantic": {
+        "primary_component": "semantic", "fitness_components": ("semantic",),
+        "selection_metric": "mIoU", "components": {"semantic": {
+            "metric_suffixes": (), "train_loss": ("train/seg_loss", "train/loss"),
+            "val_loss": ("val/seg_loss", "val/loss"),
+        }},
+    },
     "detection": {
         "primary_component": "box",
         "fitness_components": ("box",),
@@ -64,7 +72,8 @@ def column_value(row: dict[str, Any], names: tuple[str, ...]) -> float | None:
         if name not in row or row[name] in ("", None):
             continue
         try:
-            return float(row[name])
+            numeric = float(row[name])
+            return numeric if math.isfinite(numeric) else None
         except (TypeError, ValueError):
             continue
     return None
@@ -76,6 +85,8 @@ def fitness_metric(task_type: str) -> str:
 
 def calculate_fitness(row: dict[str, Any], task_type: str) -> float | None:
     """Calculate Ultralytics fitness for one results row."""
+    if task_type == "semantic":
+        return column_value(row, ("metrics/mIoU",))
     profile = get_metric_profile(task_type)
     values: list[float] = []
     for component in profile["fitness_components"]:

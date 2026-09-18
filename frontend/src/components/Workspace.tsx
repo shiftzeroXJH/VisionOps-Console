@@ -94,8 +94,10 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
 
   const experimentIdRef = useRef(experimentId)
   experimentIdRef.current = experimentId
+  const finalRemoteSyncs = useRef(new Set<string>())
 
   const refreshData = useCallback(async (background = false, isCurrent: () => boolean = () => true) => {
+    const requestedId = experimentIdRef.current
     if (!background) setLoading(true)
     try {
       const [det, comp, curvesData] = await Promise.all([
@@ -103,7 +105,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
         api.getComparison(experimentIdRef.current),
         api.getExperimentCurves(experimentIdRef.current).catch(() => null),
       ])
-      if (!isCurrent()) return
+      if (!isCurrent() || requestedId !== experimentIdRef.current) return
       setDetail(det)
       setComparison(comp)
       
@@ -143,7 +145,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
         setCurveFitnessMetric('')
       }
     } finally {
-      if (!background) setLoading(false)
+      if (!background && requestedId === experimentIdRef.current) setLoading(false)
     }
   }, [])
 
@@ -153,23 +155,37 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
     experimentIdRef.current = experimentId
     setHiddenSummaryTrials(new Set())
     setSummaryYAxisMode('overview')
+    finalRemoteSyncs.current.clear()
     loadData()
   }, [experimentId, loadData])
 
   useEffect(() => {
-    if (showParameterDrawer) return undefined
-    const remoteTrials = (detail?.trials || []).filter((trial: any) => trial.remote_server_id && ['TRAINING', 'RETRAINING'].includes(trial.internal_status))
-    if (remoteTrials.length === 0) return undefined
+    const trials = detail?.trials || []
+    const activeTrials = trials.filter((trial: any) => ['TRAINING', 'QUEUED'].includes(trial.status))
+    // Queue completion can precede the final artifact download. Sync each terminal
+    // remote trial once, including when opening an already completed experiment.
+    const remoteTrials = trials.filter((trial: any) => trial.remote_server_id && (
+      trial.status === 'TRAINING'
+      || (['COMPLETED', 'INTERRUPTED_OR_FAILED'].includes(trial.status) && !finalRemoteSyncs.current.has(trial.trial_id))
+    ))
+    if (activeTrials.length === 0 && remoteTrials.length === 0) return undefined
     let cancelled = false
     let refreshing = false
     const timer = window.setInterval(async () => {
       if (refreshing || cancelled) return
       refreshing = true
       try {
-        await Promise.all(remoteTrials.map((trial: any) => api.syncRemoteTrial(trial.trial_id).catch(() => null)))
+        await Promise.all(remoteTrials.map(async (trial: any) => {
+          try {
+            const result = await api.syncRemoteTrial(trial.trial_id)
+            if (!cancelled && trial.status !== 'TRAINING' && result.sync_status === 'synced') {
+              finalRemoteSyncs.current.add(trial.trial_id)
+            }
+          } catch { /* Retry on the next polling cycle. */ }
+        }))
         if (!cancelled) await refreshData(true, () => !cancelled)
       } catch (err) {
-        console.error('Error refreshing remote trials:', err)
+        console.error('Error refreshing training data:', err)
       } finally {
         refreshing = false
       }
@@ -178,7 +194,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [detail?.trials, experimentId, showParameterDrawer, refreshData])
+  }, [detail?.trials, experimentId, refreshData])
 
   const handleDeleteTrial = async (trialId: string, keepFiles: boolean) => {
     try {

@@ -8,6 +8,7 @@ interface Props {
 }
 
 const metricLabels = (taskType: string): Record<string, string> => {
+  if (taskType === 'semantic') return { miou: 'mIoU', pixel_accuracy: 'Pixel Accuracy' }
   const suffix = taskType === 'segment' ? '(M)' : '(B)'
   return {
     map50_95: `mAP50-95${suffix}`,
@@ -228,10 +229,10 @@ export function ValidationPreviewDialog({ trial, onClose }: Props) {
               图片数量
               <input className="input" type="number" min={1} max={500} value={imageLimit} onChange={(event) => setImageLimit(Number(event.target.value))} disabled={isRunning} />
             </label>
-            <label>
+            {(result?.task_type || trial.task_type) !== 'semantic' && <label>
               conf
               <input className="input" type="number" min={0.001} max={1} step={0.01} value={conf} onChange={(event) => setConf(Number(event.target.value))} disabled={isRunning} />
-            </label>
+            </label>}
             <button className="btn btn-primary" onClick={startValidation} disabled={isRunning}>
               {isRunning ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <RefreshCw size={16} />}
               {result ? '重新验证' : '开始验证'}

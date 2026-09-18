@@ -7,7 +7,7 @@ export type ModelSelection = {
   trial_id: string
   checkpoint_name: string
   model_path: string
-  task_type: 'auto' | 'detection' | 'segment' | 'obb'
+  task_type: 'auto' | 'detection' | 'segment' | 'obb' | 'semantic'
 }
 
 interface Props {
@@ -18,10 +18,10 @@ interface Props {
 }
 
 const modelLabel = (model: WorkbenchModel) => `${model.project} / ${model.experiment_name} / ${model.trial_name}`
-const taskLabel = (taskType: string) => ({ detection: '检测', segment: '分割', obb: 'OBB' }[taskType] || taskType)
+const taskLabel = (taskType: string) => ({ detection: '检测', segment: '实例分割', semantic: '语义分割', obb: 'OBB' }[taskType] || taskType)
 const normalizeModelTask = (taskType: string): ModelSelection['task_type'] => {
   if (taskType === 'detect') return 'detection'
-  return taskType === 'detection' || taskType === 'segment' || taskType === 'obb' ? taskType : 'auto'
+  return taskType === 'detection' || taskType === 'segment' || taskType === 'obb' || taskType === 'semantic' ? taskType : 'auto'
 }
 
 export function ModelSelector({ value, models, disabled, onChange }: Props) {
@@ -126,6 +126,7 @@ export function ModelSelector({ value, models, disabled, onChange }: Props) {
             <option value="auto">自动识别</option>
             <option value="detection">目标检测</option>
             <option value="segment">实例分割</option>
+            <option value="semantic">语义分割</option>
             <option value="obb">旋转框 OBB</option>
           </select>
         </>

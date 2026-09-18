@@ -27,6 +27,7 @@ export const getCurveColumns = (curves: Curves | undefined): string[] => {
 }
 
 const taskSuffixes = (taskType: TaskType): string[] => {
+  if (taskType === 'semantic') return ['']
   if (taskType === 'segment') return ['M']
   if (taskType === 'obb') return ['B', 'O', '']
   return ['B', '']
@@ -41,6 +42,7 @@ const findMetricColumn = (columns: string[], taskType: TaskType, metric: string)
 }
 
 export const getDefaultCurveMetrics = (columns: string[], taskType: TaskType): [string, string] => {
+  if (taskType === 'semantic') return ['metrics/mIoU', 'metrics/pixel_acc']
   const map = findMetricColumn(columns, taskType, 'mAP50-95') || columns[0] || ''
   const recall = findMetricColumn(columns, taskType, 'recall') || columns.find((column) => column !== map) || map
   return [map, recall]

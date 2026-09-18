@@ -189,6 +189,39 @@ def test_clean_training_exit_wins_cancel_race() -> None:
             _TRAINING_HANDLES.pop(process_key, None)
 
 
+@pytest.mark.parametrize("status", [STATE_TRAINING, STATE_RETRAINING, STATE_ANALYZING])
+def test_local_comparison_tracks_csv_without_persisting_summary(tmp_path: Path, status: str) -> None:
+    service = OrchestratorService(db_path=":memory:")
+    service.repo.create_experiment(ExperimentConfig(
+        experiment_id="live", description="live", project="project", task_type="segment",
+        dataset_root=str(tmp_path), dataset_yaml=str(tmp_path / "data.yaml"),
+        pretrained_model="model.pt", save_root=str(tmp_path), status=status,
+        initial_params={}, search_space={}, stop_conditions={},
+    ))
+    run_dir = tmp_path / "run"
+    service.repo.create_trial(TrialRecord(
+        trial_id="live-trial", display_name="live", experiment_id="live", iteration=1,
+        params={"epochs": 10}, status=status, run_dir=str(run_dir),
+    ))
+    assert service.compare_experiment("live")["rows"][0]["map50_95"] is None
+    rows = ["1,10,0.8,0.8,0.8,0.70,0.8,0.8,0.8,0.60"]
+    _write_results(run_dir, rows)
+    first = service.compare_experiment("live")["rows"][0]
+    assert first["map50_95"] == pytest.approx(0.6)
+    assert first["epochs_completed"] == 1
+    rows.append("2,20,0.9,0.9,0.9,0.80,0.9,0.9,0.9,0.75")
+    _write_results(run_dir, rows)
+    second = service.compare_experiment("live")["rows"][0]
+    assert second["map50_95"] == pytest.approx(0.75)
+    assert second["fitness"] == pytest.approx(1.55)
+    assert second["epochs_completed"] == 2
+    assert second["best_epoch"] == 2
+    stored = service.repo.get_trial("live-trial")
+    assert stored.status == status
+    assert not stored.summary_path
+    assert not stored.metrics
+
+
 def test_experiment_curves_include_fitness_and_metric_formula(tmp_path: Path) -> None:
     service = OrchestratorService(db_path=":memory:")
     experiment = ExperimentConfig(

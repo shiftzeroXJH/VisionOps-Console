@@ -7,7 +7,7 @@ interface Props {
   onRequestDeleteTrial: (trial: { trial_id: string; display_name?: string }) => void
 }
 
-const HIGHLIGHT_METRICS = ['fitness', 'map50_95', 'map50', 'delta_map50_95', 'precision', 'recall'] as const
+const HIGHLIGHT_METRICS = ['fitness', 'map50_95', 'map50', 'delta_map50_95', 'precision', 'recall', 'miou', 'pixel_accuracy', 'delta_miou'] as const
 
 export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequestDeleteTrial }: Props) {
   if (!data?.rows?.length) {
@@ -16,7 +16,7 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
 
   const cols = [
     'iteration', 'display_name', 'status',
-    'map50_95', 'fitness', 'map50', 'delta_map50_95', 'precision', 'recall',
+    ...(data.task_type === 'semantic' ? ['miou', 'pixel_accuracy', 'fitness', 'delta_miou'] : ['map50_95', 'fitness', 'map50', 'delta_map50_95', 'precision', 'recall']),
     'best_epoch', 'epochs_completed', 'cumulative_epochs', 'training_mode', 'model_display', 'imgsz', 'batch', 'lr0', 'patience',
   ]
 
@@ -39,6 +39,7 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
 
   const columnLabel = (key: string) => {
     const labels: Record<string, string> = {
+      miou: 'mIoU', pixel_accuracy: 'Pixel Accuracy', delta_miou: 'Delta mIoU',
       map50_95: `mAP50-95${metricSuffix}`,
       fitness: 'Fitness',
       map50: `mAP50${metricSuffix}`,
@@ -113,7 +114,7 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
 
   const cellValue = (row: any, key: string) => {
     if (key === 'status') return renderStatus(row)
-    if (key === 'delta_map50_95') return renderDelta(row.delta_map50_95)
+    if (key.startsWith('delta_')) return renderDelta(row[key])
     if (key === 'display_name') {
       return (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600 }}>
@@ -140,7 +141,8 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
   }
 
   return (
-    <div className="table-wrapper h-full" style={{ border: 'none', borderRadius: 0 }}>
+    <div className="trial-comparison-layout">
+    <div className="table-wrapper trial-comparison-scroll" style={{ border: 'none', borderRadius: 0 }}>
       <table>
         <thead style={{ position: 'sticky', top: 0, zIndex: 10 }}>
           <tr>
@@ -150,7 +152,6 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
               </th>
             ))}
             <th>备注</th>
-            <th style={{ width: 44, textAlign: 'center' }}>操作</th>
           </tr>
         </thead>
         <tbody>
@@ -180,7 +181,15 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
                 )
               })}
               <td style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.note || '-'}</td>
-              <td style={{ textAlign: 'center' }}>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <div className="trial-comparison-actions" aria-label="训练记录操作">
+      <div className="trial-comparison-actions-header" />
+      {data.rows.map((row: any) => (
+              <div key={row.trial_id} className="trial-comparison-action">
                 <button
                   className="icon-btn"
                   style={{
@@ -197,17 +206,16 @@ export function TrialComparisonTable({ data, metricSuffix, onRowClick, onRequest
                     cursor: 'pointer',
                   }}
                   onClick={(event) => { event.stopPropagation(); onRequestDeleteTrial({ trial_id: row.trial_id, display_name: row.display_name }) }}
-                  title="删除训练记录"
+                  title={`删除训练记录 ${row.display_name || row.trial_id}`}
+                  aria-label={`删除训练记录 ${row.display_name || row.trial_id}`}
                   onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger-color)'; e.currentTarget.style.backgroundColor = '#fef2f2' }}
                   onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.backgroundColor = 'transparent' }}
                 >
                   <Trash2 size={14} />
                 </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              </div>
+      ))}
+    </div>
     </div>
   )
 }

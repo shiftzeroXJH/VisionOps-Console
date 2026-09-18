@@ -12,6 +12,9 @@ datasets/
 *.engine
 *.log
 *.pid
+.tmp/
+src/backend/models/*
+!src/backend/models/README.md
 __pycache__/
 *.egg-info/
 .env

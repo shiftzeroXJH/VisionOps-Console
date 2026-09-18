@@ -292,6 +292,51 @@ body,
   padding: 0;
 }
 
+.trial-comparison-layout {
+  display: flex;
+  align-items: flex-start;
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+.trial-comparison-scroll {
+  flex: 1;
+  min-width: 0;
+}
+
+.trial-comparison-scroll th,
+.trial-comparison-actions-header {
+  height: 40px;
+  box-sizing: border-box;
+}
+
+.trial-comparison-scroll td,
+.trial-comparison-action {
+  height: 44px;
+  box-sizing: border-box;
+}
+
+.trial-comparison-actions {
+  flex: 0 0 44px;
+  border-left: 1px solid var(--border-default);
+}
+
+.trial-comparison-actions-header {
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.trial-comparison-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.trial-comparison-action:last-child {
+  border-bottom: none;
+}
+
 .workspace-summary-header {
   display: flex;
   align-items: flex-start;

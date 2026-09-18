@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Crop, Maximize2, Minus, Plus, RotateCcw, RotateCw, Trash2 } from 'lucide-react'
-import type { Detection, WorkbenchRoi } from '../api'
+import type { Detection, WorkbenchRoi, SemanticResult } from '../api'
 
 type Layer = {
+  semantic?: SemanticResult | null
   title: string
   boxes: Detection[]
   color?: string
@@ -44,6 +45,7 @@ export function OverlayViewer({
   roi, onRoiChange, onRotateLeft, onRotateRight, controlsDisabled = false,
 }: Props) {
   const viewportRef = useRef<HTMLDivElement | null>(null)
+  const [opacity, setOpacity] = useState(0.5)
   const stageRef = useRef<HTMLDivElement | null>(null)
   const [zoom, setZoom] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
@@ -133,6 +135,7 @@ export function OverlayViewer({
       <div className="overlay-viewer-toolbar">
         <span title={imageName}>{imageName}</span>
         <div className="overlay-toolbar-actions">
+          {layers.some(layer => layer.semantic) && <input aria-label="掩码透明度" title="掩码透明度" type="range" min="0" max="1" step="0.05" value={opacity} onChange={e => setOpacity(Number(e.target.value))} style={{ width: 80 }} />}
           {onRoiChange && <div className="roi-tools">
             <button className={`icon-btn ${roiEditing ? 'active' : ''}`} title={roiEditing ? '退出 ROI 绘制' : '绘制 ROI'} disabled={controlsDisabled} onClick={() => setRoiEditing((current) => !current)}><Crop size={16} /></button>
             {roi && <label className="roi-angle" title="ROI 转正角度">
@@ -168,7 +171,8 @@ export function OverlayViewer({
               <div ref={layerIndex === 0 ? stageRef : undefined} className="overlay-stage" style={{ width, height, transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}>
                 <img src={imageUrl} alt={imageName} draggable={false} />
                 {(showResults || (layerIndex === 0 && visibleRoi)) && (
-                  <svg viewBox={`0 0 ${width} ${height}`} aria-label={`${layer.title}检测框`}>
+                  <svg viewBox={`0 0 ${width} ${height}`} aria-label={`${layer.title}结果`}>
+                    {showResults && layer.semantic?.layers.filter(item => visibleClasses.has(item.class_id)).map(item => <image key={item.class_id} href={item.url} width={width} height={height} opacity={opacity} style={{ imageRendering: 'pixelated' }} />)}
                     {showResults && layer.boxes.filter((box) => visibleClasses.has(box.class_id)).map((box, index) => {
                       const color = layer.color || colors[Math.abs(box.class_id) % colors.length]
                       const label = box.confidence == null ? box.class_name : `${box.class_name} ${box.confidence.toFixed(2)}`

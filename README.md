@@ -4,6 +4,18 @@ YOLO Platform 是一个面向工业视觉训练的 Web 平台，用来管理 YOL
 
 ## 功能
 
+创建实验使用任务类型、YOLO 系列、模型规格联动选择。检测、实例分割和 OBB
+支持 YOLOv8 / YOLO11 / YOLO26 的 n/s/m/l/x；语义分割使用 YOLO26 的
+`-sem.pt` 模型，要求本地或远程训练环境安装 `ultralytics>=8.4.155`。
+官方权重放在 `src/backend/models`，缺失时训练启动自动下载，权重不提交 Git。
+自定义权重仍可在训练参数中覆盖，远程官方权重缓存到远程工作目录的 `models`。
+
+语义分割数据通过 YAML 配置，支持 PNG 类别掩码（`masks_dir`、`label_mapping`、
+255 忽略像素）及 YOLO TXT 多边形。背景规则遵循 Ultralytics；二分类预测中
+0 为背景、1 为前景。结果以 mIoU 和像素准确率展示，工作台支持类别图层、
+透明度、验证对比及 ONNX 推理。语义评估保存 PNG 类别图，不生成检测框 XML；
+为兼容历史评估索引，结果仍存放在数据集的 `predictions_xml/<evaluation_id>` 中。
+
 - 创建实验并按项目分组管理任务。
 - 调整 YOLO 训练参数并启动本地训练。
 - 通过持久化训练队列限制全局并行任务数，并调整或取消等待任务。

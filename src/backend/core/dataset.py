@@ -16,6 +16,8 @@ def inspect_dataset(dataset_root: str) -> list[str]:
     candidates: list[str] = []
     for yaml_name in YAML_NAMES:
         candidates.extend(str(path.resolve()) for path in root.rglob(yaml_name))
+    if not candidates:
+        candidates = [str(path.resolve()) for path in root.rglob("*") if path.suffix.lower() in {".yaml", ".yml"}]
     return sorted(set(candidates))
 
 

@@ -34,6 +34,7 @@ def main() -> int:
             simplify=True,
             dynamic=False,
             device="cpu",
+            nms=False,
         )
         source_path = Path(str(exported_path)).resolve()
         if not source_path.exists():

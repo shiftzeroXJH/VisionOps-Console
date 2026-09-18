@@ -296,6 +296,12 @@ def update_remote_server(remote_server_id: str, payload: dict[str, Any]) -> dict
     return result
 
 
+@app.get("/api/model-catalog")
+def get_model_catalog() -> dict[str, Any]:
+    from backend.core.model_catalog import model_catalog
+    return model_catalog()
+
+
 @app.post("/api/experiments")
 def create_experiment(payload: dict[str, Any]) -> dict[str, Any]:
     body = dict(payload)
@@ -308,7 +314,9 @@ def create_experiment(payload: dict[str, Any]) -> dict[str, Any]:
             task_type=body["task_type"],
             dataset_root=body["dataset_root"],
             dataset_yaml=body.get("dataset_yaml"),
-            pretrained=body["pretrained"],
+            pretrained=body.get("pretrained"),
+            model_family=body.get("model_family"),
+            model_scale=body.get("model_scale"),
             save_root=body["save_root"],
             initial_params=body.get("initial_params"),
         ),

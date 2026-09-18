@@ -254,10 +254,7 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                           <tr>
                             <th>class id</th>
                             <th>class name</th>
-                            <th>Precision</th>
-                            <th>Recall</th>
-                            <th>mAP50</th>
-                            <th>mAP50-95</th>
+                            {(data.metric_context?.task_type === 'semantic' ? ['IoU', 'Pixel Accuracy'] : ['Precision', 'Recall', 'mAP50', 'mAP50-95']).map(label => <th key={label}>{label}</th>)}
                           </tr>
                         </thead>
                         <tbody>
@@ -267,7 +264,7 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                               <tr key={item.class_id}>
                                 <td className="font-mono">{item.class_id}</td>
                                 <td style={{ fontWeight: 500 }}>{item.class_name}</td>
-                                {['precision', 'recall', 'map50', 'map50_95'].map((key) => (
+                                {(data.metric_context?.task_type === 'semantic' ? ['iou', 'pixel_accuracy'] : ['precision', 'recall', 'map50', 'map50_95']).map((key) => (
                                   <td key={key} className="font-mono">{typeof item[key] === 'number' ? item[key].toFixed(4) : '-'}</td>
                                 ))}
                               </tr>
@@ -324,22 +321,22 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                   {datasetAnalysis.totals && (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
                     <div style={{ padding: '0.65rem 0.75rem', borderRadius: 'var(--radius-sm)', background: 'var(--bg-subtle)', border: '1px solid var(--border-default)', textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Train 实例数</div>
-                      <div className="font-mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.15rem' }}>{datasetTotals.train_instances ?? 0}</div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Train {datasetAnalysis.task_type === 'semantic' ? '像素数' : '实例数'}</div>
+                      <div className="font-mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.15rem' }}>{datasetTotals.train_pixels ?? datasetTotals.train_instances ?? 0}</div>
                       <div className="font-mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                         图 {datasetSplits.train?.image_count ?? 0} / 标 {datasetSplits.train?.label_file_count ?? 0}
                       </div>
                     </div>
                     <div style={{ padding: '0.65rem 0.75rem', borderRadius: 'var(--radius-sm)', background: 'var(--bg-subtle)', border: '1px solid var(--border-default)', textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Val 实例数</div>
-                      <div className="font-mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.15rem' }}>{datasetTotals.val_instances ?? 0}</div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Val {datasetAnalysis.task_type === 'semantic' ? '像素数' : '实例数'}</div>
+                      <div className="font-mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.15rem' }}>{datasetTotals.val_pixels ?? datasetTotals.val_instances ?? 0}</div>
                       <div className="font-mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                         图 {datasetSplits.val?.image_count ?? 0} / 标 {datasetSplits.val?.label_file_count ?? 0}
                       </div>
                     </div>
                     <div style={{ padding: '0.65rem 0.75rem', borderRadius: 'var(--radius-sm)', background: 'var(--bg-subtle)', border: '1px solid var(--border-default)', textAlign: 'center' }}>
                       <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>总计 / 类别</div>
-                      <div className="font-mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.15rem' }}>{datasetTotals.total_instances ?? 0}</div>
+                      <div className="font-mono" style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.15rem' }}>{datasetTotals.total_pixels ?? datasetTotals.total_instances ?? 0}</div>
                       <div className="font-mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
                         类别 {datasetTotals.class_count ?? 0}
                       </div>
@@ -377,9 +374,9 @@ export function TrialSummaryDrawer({ trialId, onClose, onUpdated }: Props) {
                             <tr key={item.class_id}>
                               <td>{item.class_id}</td>
                               <td>{item.class_name}</td>
-                              <td>{item.train_instances}</td>
-                              <td>{item.val_instances}</td>
-                              <td>{item.total_instances}</td>
+                              <td>{item.train_pixels ?? item.train_instances}</td>
+                              <td>{item.val_pixels ?? item.val_instances}</td>
+                              <td>{item.total_pixels ?? item.total_instances}</td>
                               <td>{typeof item.total_ratio === 'number' ? `${(item.total_ratio * 100).toFixed(2)}%` : '-'}</td>
                             </tr>
                           ))}
