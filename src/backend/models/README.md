@@ -7,3 +7,6 @@ segmentation uses YOLO26 `yolo26{n,s,m,l,x}-sem.pt` weights.
 Weights, download staging files and locks are not committed. Custom weights can
 still be selected in training parameters. Remote hosts cache official weights
 under their configured working directory's `models` folder.
+For remote training, an available local official weight is uploaded to the trial
+directory and used directly. Only when it is absent locally does the remote
+worker use its model cache or download the weight.

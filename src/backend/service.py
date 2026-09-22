@@ -1216,6 +1216,16 @@ class OrchestratorService:
             if not amp_source.exists():
                 amp_source = Path(__file__).resolve().parent / "models" / "yolo26n.pt"
             self._mkdir_remote(sftp, remote_dir)
+            # Official names must prefer bundled local weights over remote downloads.
+            # Use a trial-local absolute path so the worker does not resolve the
+            # name against a different remote cache (or download it again).
+            from backend.core.model_catalog import OFFICIAL_NAMES
+            if remote_model in OFFICIAL_NAMES:
+                local_weight = Path(__file__).resolve().parent / "models" / remote_model
+                if local_weight.is_file():
+                    _validate_pretrained_model(str(local_weight))
+                    remote_model_path = self._remote_join(remote_dir, remote_model)
+                    self._upload_remote_file(sftp, local_weight, remote_model_path)
             request = {
                 "dataset_yaml": dataset_yaml,
                 "pretrained_model": remote_model_path,
@@ -3435,6 +3445,8 @@ class OrchestratorService:
         return {
             "experiment_id": experiment_id,
             "curves": curves,
+            "trial_order": [trial.trial_id for trial in sorted(trials, key=lambda trial: trial.iteration, reverse=True)
+                            if trial.trial_id in curves],
             "trial_labels": trial_labels,
             "fitness_metric": fitness_metric(config.task_type),
         }

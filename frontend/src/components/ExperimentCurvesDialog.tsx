@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Activity, X } from 'lucide-react'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api'
-import { getCurveColumns, getCurveMetricLabel, getDefaultCurveMetrics, type TaskType } from '../curveMetrics'
+import { getCurveColumns, getCurveMetricLabel, getDefaultCurveMetrics, getCurveTrialIds, type TaskType } from '../curveMetrics'
 
 interface Props {
   experimentId: string
@@ -58,7 +58,7 @@ export function ExperimentCurvesDialog({ experimentId, taskType, onClose }: Prop
       try {
         const res = await api.getExperimentCurves(experimentId)
         setData(res)
-        setSelectedTrials(new Set(Object.keys(res.curves || {}).sort().reverse().slice(0, 5)))
+        setSelectedTrials(new Set(getCurveTrialIds(res).slice(0, 5)))
         const [defaultMap, defaultRecall] = getDefaultCurveMetrics(getCurveColumns(res.curves), taskType)
         setSelectedMetricA(defaultMap)
         setSelectedMetricB(defaultRecall)
@@ -76,7 +76,7 @@ export function ExperimentCurvesDialog({ experimentId, taskType, onClose }: Prop
     setSelectedTrials(next)
   }
 
-  const trialIds = useMemo(() => Object.keys(data?.curves || {}).sort(), [data])
+  const trialIds = useMemo(() => getCurveTrialIds(data), [data])
   const trialLabels = useMemo(() => data?.trial_labels || {}, [data])
   const curveColumns = useMemo(() => getCurveColumns(data?.curves), [data])
 

@@ -259,6 +259,15 @@ def test_experiment_curves_include_fitness_and_metric_formula(tmp_path: Path) ->
 
     assert curves["fitness_metric"] == "mAP50-95(B) + mAP50-95(M)"
     assert curves["curves"]["trial"][0]["fitness"] == pytest.approx(1.3)
+    # Trial IDs (including remote IDs) need not sort in training order.
+    for iteration, trial_id in enumerate(["z_old", "a_mid", "y_mid", "b_mid", "c_latest"], start=2):
+        service.repo.create_trial(TrialRecord(
+            trial_id=trial_id, display_name=trial_id, experiment_id="experiment",
+            iteration=iteration, params={}, status="COMPLETED", run_dir=str(run_dir),
+        ))
+    curves = service.get_experiment_curves("experiment")
+    assert curves["trial_order"] == ["c_latest", "b_mid", "y_mid", "a_mid", "z_old", "trial"]
+    assert curves["trial_order"][:5] == ["c_latest", "b_mid", "y_mid", "a_mid", "z_old"]
 
 
 def test_comparison_exposes_fitness_but_keeps_map_best(tmp_path: Path) -> None:

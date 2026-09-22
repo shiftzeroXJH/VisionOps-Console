@@ -529,3 +529,25 @@ def test_remote_launch_uses_explicit_model_in_worker_request(setup_remote):
     request = json.loads((Path(trial.run_dir) / "request.json").read_text(encoding="utf-8"))
     assert trial.model == "/custom/checkpoints/best.pt"
     assert request["pretrained_model"] == "/custom/checkpoints/best.pt"
+
+
+@pytest.mark.parametrize("present", [True, False])
+def test_remote_official_model_prefers_local_weights(setup_remote, tmp_path, monkeypatch, present):
+    import backend.service as service_module
+
+    service, config, _, sftp = setup_remote
+    package = tmp_path / "package"
+    models = package / "models"
+    models.mkdir(parents=True)
+    weight = models / "yolo11n.pt"
+    if present:
+        weight.write_bytes(b"x" * 2048)
+    monkeypatch.setattr(service_module, "__file__", str(package / "service.py"))
+    result = service.launch_remote_trial(config.experiment_id, remote_server_id="remote_001",
+                                         pretrained="yolo11n.pt")
+    trial = service.repo.get_trial(result["trial_id"])
+    request = json.loads((Path(trial.run_dir) / "request.json").read_text(encoding="utf-8"))
+    expected = trial.remote_run_dir + "/yolo11n.pt" if present else "yolo11n.pt"
+    assert request["pretrained_model"] == expected
+    uploads = [(local, remote) for local, remote in sftp.uploads if Path(local).name == "yolo11n.pt"]
+    assert uploads == ([(str(weight), expected)] if present else [])

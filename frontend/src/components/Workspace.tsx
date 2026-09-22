@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Activity, Check, Edit2, FolderInput, RadioTower, Square, Trash2, X, Settings2, ZoomIn, ZoomOut } from 'lucide-react'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api'
-import { getCurveColumns, getCurveMetricLabel, getDefaultCurveMetrics, getMetricSuffix } from '../curveMetrics'
+import { getCurveColumns, getCurveMetricLabel, getDefaultCurveMetrics, getMetricSuffix, getCurveTrialIds } from '../curveMetrics'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DeleteDialog } from './DeleteDialog'
 import { ExperimentCurvesDialog } from './ExperimentCurvesDialog'
@@ -110,7 +110,7 @@ export function Workspace({ experimentId, onExperimentUpdated, onDeleted }: Prop
       setComparison(comp)
       
       if (curvesData?.curves) {
-        const topTrials = Object.keys(curvesData.curves).sort().reverse().slice(0, 5)
+        const topTrials = getCurveTrialIds(curvesData).slice(0, 5)
         const columns = getCurveColumns(curvesData.curves)
         const [defaultMap, defaultRecall] = getDefaultCurveMetrics(columns, det.experiment.task_type)
         setTrialIds(topTrials)

@@ -3,6 +3,11 @@ export type TaskType = 'detection' | 'segment' | 'obb' | string
 type CurveRow = Record<string, unknown>
 type Curves = Record<string, CurveRow[]>
 
+// The API orders trials by iteration; IDs are opaque and cannot express recency.
+export const getCurveTrialIds = (data: { curves?: Curves; trial_order?: string[] } | null): string[] =>
+  data?.trial_order?.filter((id) => id in (data.curves || {}))
+  ?? Object.keys(data?.curves || {}).reverse()
+
 const EXCLUDED_COLUMNS = new Set(['epoch', 'time'])
 
 const metricColumn = (metric: string, suffix: string) =>
