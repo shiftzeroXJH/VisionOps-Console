@@ -191,6 +191,35 @@ function ClassFilter({ classes, boxes, visible, onChange, semantic, semanticTask
 function ImageRail({ images, currentId, imageUrl, onSelect, selectedIds, onSelectionChange, onDeleteSelected, deleteDisabled }: { images: WorkbenchImage[]; currentId: string; imageUrl: (item: WorkbenchImage) => string; onSelect: (id: string) => void; selectedIds?: Set<string>; onSelectionChange?: (next: Set<string>) => void; onDeleteSelected?: () => void; deleteDisabled?: boolean }) {
   const activeSelectedIds = selectedIds || new Set<string>()
   const selectable = Boolean(onSelectionChange)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const [viewport, setViewport] = useState({ horizontal: false, size: 500, offset: 0 })
+  const rowSize = viewport.horizontal ? (selectable ? 136 : 112) : 58
+  useEffect(() => {
+    const list = listRef.current
+    if (!list) return
+    const measure = () => {
+      const horizontal = window.matchMedia('(max-width: 620px)').matches
+      setViewport({ horizontal, size: horizontal ? list.clientWidth : list.clientHeight,
+        offset: horizontal ? list.scrollLeft : list.scrollTop })
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(list)
+    window.addEventListener('resize', measure)
+    measure()
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure) }
+  }, [])
+  useEffect(() => {
+    const list = listRef.current
+    const index = images.findIndex(item => item.image_id === currentId)
+    if (!list || index < 0) return
+    const offset = viewport.horizontal ? list.scrollLeft : list.scrollTop
+    const size = viewport.horizontal ? list.clientWidth : list.clientHeight
+    if (index * rowSize < offset || (index + 1) * rowSize > offset + size) {
+      list.scrollTo(viewport.horizontal ? { left: index * rowSize } : { top: index * rowSize })
+    }
+  }, [currentId, images, rowSize, viewport.horizontal])
+  const start = Math.max(0, Math.min(images.length - 1, Math.floor(viewport.offset / rowSize)) - 3)
+  const end = Math.min(images.length, start + Math.ceil(viewport.size / rowSize) + 7)
   const allSelected = selectable && images.length > 0 && images.every((item) => activeSelectedIds.has(item.image_id))
   return (
     <aside className="image-rail">
@@ -204,20 +233,34 @@ function ImageRail({ images, currentId, imageUrl, onSelect, selectedIds, onSelec
           <button className="image-rail-delete" title={activeSelectedIds.size ? `删除选中的 ${activeSelectedIds.size} 张图片` : '请先选择图片'} disabled={deleteDisabled || !activeSelectedIds.size} onClick={onDeleteSelected}><Trash2 size={14} /></button>
         </div>}
       </div>
-      <div className="image-rail-list">
-        {images.map((item) => (
-          <div key={item.image_id} role="button" tabIndex={0} className={`image-rail-item ${selectable ? 'selectable' : ''} ${currentId === item.image_id ? 'active' : ''}`} onClick={() => onSelect(item.image_id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onSelect(item.image_id) }} title={item.name}>
+      <div ref={listRef} className="image-rail-list virtual-image-rail" onScroll={(event) => {
+        const node = event.currentTarget
+        setViewport(current => ({ ...current, offset: current.horizontal ? node.scrollLeft : node.scrollTop }))
+      }}>
+        <div style={viewport.horizontal ? { position: 'relative', width: images.length * rowSize, height: '100%', flexShrink: 0 } : { position: 'relative', height: images.length * rowSize }}>
+        {images.slice(start, end).map((item, index) => (
+          <div key={item.image_id} role="button" tabIndex={0} style={viewport.horizontal
+            ? { position: 'absolute', left: (start + index) * rowSize, width: rowSize, height: '100%' }
+            : { position: 'absolute', top: (start + index) * rowSize, height: rowSize }} className={`image-rail-item ${selectable ? 'selectable' : ''} ${currentId === item.image_id ? 'active' : ''}`} onClick={() => onSelect(item.image_id)} onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(item.image_id) }
+              if (['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft'].includes(event.key)) {
+                event.preventDefault()
+                const next = start + index + (event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : -1)
+                if (images[next]) onSelect(images[next].image_id)
+              }
+            }} title={item.name}>
             {selectable && <input type="checkbox" aria-label={`选择 ${item.name}`} checked={activeSelectedIds.has(item.image_id)} onClick={(event) => event.stopPropagation()} onChange={(event) => {
               const next = new Set(activeSelectedIds)
               if (event.target.checked) next.add(item.image_id)
               else next.delete(item.image_id)
               onSelectionChange?.(next)
             }} />}
-            <img src={imageUrl(item)} alt="" />
+            <img src={imageUrl(item)} alt="" decoding="async" />
             <span>{item.name}</span>
             <i className={`image-status ${item.status || 'completed'}`} title={item.error || item.status} />
           </div>
         ))}
+        </div>
       </div>
     </aside>
   )
@@ -434,6 +477,12 @@ function EvaluationView({ models, model, onModelChange, initialDatasetPath, init
   const [metricsExpanded, setMetricsExpanded] = useState(true)
   const [evaluationHistory, setEvaluationHistory] = useState<EvaluationSummary[]>([])
   const [selectedEvaluationId, setSelectedEvaluationId] = useState('')
+  const resultRequest = useRef(0)
+  const detailCache = useRef(new Map<string, WorkbenchImage>())
+  const cacheEvaluation = useRef('')
+  const [detail, setDetail] = useState<{ evaluationId: string; image: WorkbenchImage } | null>(null)
+  const [detailFailure, setDetailFailure] = useState<{ key: string; message: string } | null>(null)
+  const [detailRetry, setDetailRetry] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -451,11 +500,13 @@ function EvaluationView({ models, model, onModelChange, initialDatasetPath, init
     finally { setBusy(false) }
   }
   const loadEvaluation = async (evaluationId: string) => {
+    const request = ++resultRequest.current
     setSelectedEvaluationId(evaluationId)
     if (!evaluationId) return
     setBusy(true); setError('')
     try {
       const loaded = await api.getWorkbenchEvaluation(evaluationId, datasetPath) as EvaluationResult
+      if (request !== resultRequest.current) return
       setResult(loaded)
       setCurrentId(loaded.images?.[0]?.image_id || '')
       setVisible(new Set((loaded.classes || []).map((item) => item.class_id)))
@@ -466,34 +517,67 @@ function EvaluationView({ models, model, onModelChange, initialDatasetPath, init
       onModelChange(loaded.model_source === 'platform'
         ? { model_source: 'platform', trial_id: loaded.trial_id || '', checkpoint_name: loaded.checkpoint_name || '', model_path: '', task_type: taskType }
         : { model_source: 'local', trial_id: '', checkpoint_name: '', model_path: loaded.model_path || '', task_type: taskType })
-    } catch (err) { setError(errorMessage(err, '评估结果加载失败')) }
-    finally { setBusy(false) }
+    } catch (err) { if (request === resultRequest.current) setError(errorMessage(err, '评估结果加载失败')) }
+    finally { if (request === resultRequest.current) setBusy(false) }
   }
   const evaluate = async () => {
+    const request = ++resultRequest.current
     setBusy(true); setError(''); setResult(null)
     try {
       if (!inspection) setInspection(await api.inspectWorkbenchDataset(datasetPath))
       const job = await api.evaluateWorkbench({ ...modelPayload(model), dataset_path: datasetPath, conf, imgsz, batch })
       const completed = await waitForJob<EvaluationResult>(job.job_id)
+      if (request !== resultRequest.current) return
       if (!completed.result) throw new Error('评估任务没有返回结果')
       setResult(completed.result)
       setCurrentId(completed.result.images?.[0]?.image_id || '')
       setVisible(new Set((completed.result.classes || []).map((item) => item.class_id)))
       setSelectedEvaluationId(completed.result.evaluation_id)
       try { await refreshHistory() } catch { /* The completed result remains usable if history refresh fails. */ }
-    } catch (err) { setError(errorMessage(err, '评估失败')) } finally { setBusy(false) }
+    } catch (err) { if (request === resultRequest.current) setError(errorMessage(err, '评估失败')) } finally { if (request === resultRequest.current) setBusy(false) }
   }
   const images: WorkbenchImage[] = result?.images || []
   const modelReady = model.model_source === 'platform' ? Boolean(model.trial_id && model.checkpoint_name) : Boolean(model.model_path.trim())
-  const current = images.find((item) => item.image_id === currentId) || images[0]
+  const selectedImage = images.find((item) => item.image_id === currentId) || images[0]
   const evaluationId = result?.evaluation_id || ''
+  const detailKey = `${evaluationId}/${selectedImage?.image_id || ''}`
+  const current = detail?.evaluationId === evaluationId && detail.image.image_id === selectedImage?.image_id ? detail.image : null
+  useEffect(() => {
+    if (cacheEvaluation.current !== evaluationId) {
+      detailCache.current.clear()
+      cacheEvaluation.current = evaluationId
+    }
+    if (!evaluationId || !selectedImage) return
+    const imageId = selectedImage.image_id
+    const key = `${evaluationId}/${imageId}`
+    const cached = detailCache.current.get(imageId)
+    if (cached) {
+      detailCache.current.delete(imageId)
+      detailCache.current.set(imageId, cached)
+      setDetail({ evaluationId, image: cached })
+      setDetailFailure(null)
+      return
+    }
+    const controller = new AbortController()
+    setDetailFailure(null)
+    void api.getWorkbenchEvaluationImage(evaluationId, imageId, controller.signal).then(image => {
+      if (controller.signal.aborted) return
+      detailCache.current.set(imageId, image)
+      while (detailCache.current.size > 32) detailCache.current.delete(detailCache.current.keys().next().value!)
+      setDetail({ evaluationId, image })
+    }).catch(err => {
+      if (!controller.signal.aborted) setDetailFailure({ key, message: errorMessage(err, '图片详情加载失败') })
+    })
+    return () => controller.abort()
+  }, [evaluationId, selectedImage, detailRetry])
+  useEffect(() => () => { ++resultRequest.current }, [])
   const url = (item: WorkbenchImage) => `/api/workbench/evaluations/${evaluationId}/images/${item.image_id}/file`
   const allBoxes = [...(current?.labels || []), ...(current?.detections || [])]
   return (
     <div className={`workbench-body evaluation-body ${result ? 'has-metrics' : ''}`}>
       <div className="workbench-toolbar evaluation-toolbar">
         <ModelSelector models={models} value={model} disabled={busy} onChange={onModelChange} />
-        <label className="dataset-field">验证集路径<input className="input" value={datasetPath} placeholder="data.yaml 或图片与标注所在目录" onChange={(event) => { setDatasetPath(event.target.value); setInspection(null); setEvaluationHistory([]); setSelectedEvaluationId(''); setResult(null) }} /></label>
+        <label className="dataset-field">验证集路径<input className="input" disabled={busy} value={datasetPath} placeholder="data.yaml 或图片与标注所在目录" onChange={(event) => { ++resultRequest.current; setDatasetPath(event.target.value); setInspection(null); setEvaluationHistory([]); setSelectedEvaluationId(''); setResult(null); setDetail(null) }} /></label>
         <label className="evaluation-history-field">评估结果
           <span className="select-with-icon"><History size={15} /><select className="input" value={selectedEvaluationId} disabled={busy || !evaluationHistory.length} onChange={(event) => void loadEvaluation(event.target.value)}>
             <option value="">{evaluationHistory.length ? '选择历史结果' : '暂无评估结果'}</option>
@@ -510,9 +594,14 @@ function EvaluationView({ models, model, onModelChange, initialDatasetPath, init
       </div>
       {result && <MetricsBand result={result} expanded={metricsExpanded} onToggle={() => setMetricsExpanded((current) => !current)} />}
       <div ref={setGridRef} className="workbench-main-grid" style={{ '--image-rail-width': `${widths.left}px`, '--class-panel-width': `${widths.right}px` } as React.CSSProperties}>
-        <ImageRail images={images} currentId={current?.image_id || ''} imageUrl={url} onSelect={setCurrentId} />
+        <ImageRail images={images} currentId={selectedImage?.image_id || ''} imageUrl={item => `/api/workbench/evaluations/${evaluationId}/images/${item.image_id}/thumbnail`} onSelect={setCurrentId} />
         <main className="viewer-region">
-          {current ? <OverlayViewer imageUrl={url(current)} imageName={current.name} width={current.width} height={current.height} layers={[{ title: 'Label', boxes: current.labels || [], semantic: current.semantic_labels, color: '#22c55e' }, { title: 'Predict', boxes: current.detections || [], semantic: current.semantic, color: '#f97316' }]} visibleClasses={visible} showResults /> : <EmptyState icon={<ScanSearch size={34} />} text="选择模型和验证集后开始评估" />}
+          {selectedImage ? <>
+            <OverlayViewer imageUrl={url(selectedImage)} imageName={selectedImage.name} width={selectedImage.width} height={selectedImage.height} layers={[{ title: 'Label', boxes: current?.labels || [], semantic: current?.semantic_labels, color: '#22c55e' }, { title: 'Predict', boxes: current?.detections || [], semantic: current?.semantic, color: '#f97316' }]} visibleClasses={visible} showResults />
+            {!current && <div className="evaluation-detail-status">{detailFailure?.key === detailKey
+              ? <><span>{detailFailure.message}</span><button className="btn" onClick={() => setDetailRetry(value => value + 1)}>重试</button></>
+              : <><Loader2 className="spin" size={16} /><span>加载标注与预测…</span></>}</div>}
+          </> : <EmptyState icon={<ScanSearch size={34} />} text="选择模型和验证集后开始评估" />}
         </main>
         <ClassFilter classes={result?.classes || []} boxes={allBoxes} semantic={current?.semantic} semanticTask={model.task_type === 'semantic' || result?.task_type === 'semantic'} visible={visible} onChange={setVisible} />
         <SidebarResizeHandles widths={widths} {...resizeHandlers} />

@@ -53,6 +53,10 @@ export function OverlayViewer({
   const [roiEditing, setRoiEditing] = useState(false)
   const [roiStart, setRoiStart] = useState<{ pointerId: number; x: number; y: number } | null>(null)
   const [draftRoi, setDraftRoi] = useState<WorkbenchRoi | null>(null)
+  const [imageFailure, setImageFailure] = useState('')
+  const [imageRetry, setImageRetry] = useState({ url: '', count: 0 })
+  const loadedImageUrl = imageRetry.url === imageUrl && imageRetry.count > 0
+    ? `${imageUrl}${imageUrl.includes('?') ? '&' : '?'}retry=${imageRetry.count}` : imageUrl
 
   const fit = useCallback(() => {
     const viewport = viewportRef.current
@@ -155,6 +159,10 @@ export function OverlayViewer({
           </div>
         </div>
       </div>
+      {imageFailure === loadedImageUrl && <div className="overlay-image-error" role="alert">
+        <span>原图加载失败，请确认源文件仍存在。</span>
+        <button className="btn" onClick={() => setImageRetry(current => ({ url: imageUrl, count: current.url === imageUrl ? current.count + 1 : 1 }))}>重试原图</button>
+      </div>}
       <div className={`overlay-panes ${layers.length > 1 ? 'paired' : ''}`}>
         {layers.map((layer, layerIndex) => (
           <section className="overlay-pane" key={layer.title}>
@@ -169,7 +177,7 @@ export function OverlayViewer({
               onPointerCancel={pointerEnd}
             >
               <div ref={layerIndex === 0 ? stageRef : undefined} className="overlay-stage" style={{ width, height, transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}>
-                <img src={imageUrl} alt={imageName} draggable={false} />
+                <img src={loadedImageUrl} alt={imageName} draggable={false} onError={() => setImageFailure(loadedImageUrl)} />
                 {(showResults || (layerIndex === 0 && visibleRoi)) && (
                   <svg viewBox={`0 0 ${width} ${height}`} aria-label={`${layer.title}结果`}>
                     {showResults && layer.semantic?.layers.filter(item => visibleClasses.has(item.class_id)).map(item => <image key={item.class_id} href={item.url} width={width} height={height} opacity={opacity} style={{ imageRendering: 'pixelated' }} />)}

@@ -181,11 +181,24 @@ def list_workbench_evaluations(dataset_path: str) -> dict[str, Any]:
 
 
 @app.get("/api/workbench/evaluations/{evaluation_id}")
-def get_workbench_evaluation(evaluation_id: str, dataset_path: str) -> dict[str, Any]:
+def get_workbench_evaluation(evaluation_id: str, dataset_path: str, view: str | None = None) -> dict[str, Any]:
     return _invoke_sync(
         "get-workbench-evaluation",
-        lambda: service.workbench.get_evaluation(dataset_path, evaluation_id),
+        lambda: service.workbench.get_evaluation(dataset_path, evaluation_id, view),
     )
+
+
+@app.get("/api/workbench/evaluations/{evaluation_id}/images/{image_id}")
+def get_workbench_evaluation_detail(evaluation_id: str, image_id: str) -> dict[str, Any]:
+    return _invoke_sync("get-workbench-evaluation-detail", lambda: service.workbench.evaluation_image_detail(evaluation_id, image_id))
+
+
+@app.get("/api/workbench/evaluations/{evaluation_id}/images/{image_id}/thumbnail")
+def get_workbench_evaluation_thumbnail(evaluation_id: str, image_id: str) -> FileResponse:
+    try:
+        return FileResponse(service.workbench.evaluation_thumbnail_path(evaluation_id, image_id))
+    except (WorkbenchError, OSError) as exc:
+        raise HTTPException(status_code=400, detail={"error": str(exc), "action": "get-workbench-evaluation-thumbnail"}) from exc
 
 
 @app.get("/api/workbench/evaluations/{evaluation_id}/images/{image_id}/file")

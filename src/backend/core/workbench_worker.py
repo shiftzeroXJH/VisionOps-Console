@@ -372,59 +372,44 @@ def run_evaluation(request: dict[str, Any]) -> dict[str, Any]:
         )
         label_loader = lambda image_path: _simple_labels(image_path, label_type, model_names)
 
+    from backend.core.evaluation_validator import capture_validator, serialize_validation_prediction
+    predictions_dir = Path(inspection["dataset_root"]) / "predictions_xml" / request["evaluation_id"]
+    predictions_dir.mkdir(parents=True, exist_ok=False)
+    sources = {str((adapter_dir / "images" / "val" / f"{index:06d}_{path.name}").resolve()
+                   if adapter_dir else path.resolve()): (index, path) for index, path in enumerate(images)}
+    image_results: dict[int, dict[str, Any]] = {}
+
+    def emit(path: str, prediction: Any, shape: tuple[int, int]) -> None:
+        if path not in sources:
+            raise RuntimeError(f"validation returned an unknown image: {path}")
+        index, image_path = sources[path]
+        if index in image_results:
+            raise RuntimeError(f"validation returned duplicate predictions: {path}")
+        height, width = shape
+        detections = serialize_validation_prediction(prediction, shape, model_names, task_type)
+        # IDs prevent colliding exports for equal basenames in different directories.
+        image_id = f"eval_img_{index:06d}"
+        xml_path = predictions_dir / f"{image_id}_{image_path.stem}.xml"
+        _write_prediction_xml(xml_path, image_path, width, height, detections)
+        image_results[index] = {"image_id": image_id, "name": image_path.name,
+                                "source_path": str(image_path), "width": width, "height": height,
+                                "labels": label_loader(image_path), "detections": detections,
+                                "xml_path": str(xml_path)}
+
     try:
         validation = model.val(
-            data=str(dataset_yaml),
-            split="val",
-            conf=0.001,
-            imgsz=int(request["imgsz"]),
-            batch=int(request["batch"]),
-            workers=0,
-            plots=False,
-            save=False,
-            verbose=False,
+            validator=capture_validator(task_type, float(request["display_conf"]), emit),
+            data=str(dataset_yaml), split="val", conf=0.001,
+            imgsz=int(request["imgsz"]), batch=int(request["batch"]),
+            workers=0, plots=False, save=False, verbose=False,
         )
-        metrics = _extract_metrics(validation, task_type)
-        per_class = _extract_per_class_metrics(validation, task_type)
-        predictions_dir = Path(inspection["dataset_root"]) / "predictions_xml" / request["evaluation_id"]
-        predictions_dir.mkdir(parents=True, exist_ok=False)
-        image_results: list[dict[str, Any]] = []
-        for index, image_path in enumerate(images):
-            with Image.open(image_path) as image:
-                width, height = image.size
-            labels = label_loader(image_path)
-            prediction = model.predict(
-                source=str(image_path),
-                conf=float(request["display_conf"]),
-                imgsz=int(request["imgsz"]),
-                save=False,
-                verbose=False,
-            )[0]
-            names = _names(getattr(prediction, "names", model_names)) or model_names
-            detections = _serialize_boxes(prediction, names, task_type)
-            xml_path = predictions_dir / f"{image_path.stem}.xml"
-            _write_prediction_xml(xml_path, image_path, width, height, detections)
-            image_results.append(
-                {
-                    "image_id": f"eval_img_{index:06d}",
-                    "name": image_path.name,
-                    "source_path": str(image_path),
-                    "width": width,
-                    "height": height,
-                    "labels": labels,
-                    "detections": detections,
-                    "xml_path": str(xml_path),
-                }
-            )
-        return {
-            "task_type": task_type,
-            "dataset": inspection,
-            "classes": _class_rows(model_names),
-            "metrics": metrics,
-            "per_class_metrics": per_class,
-            "images": image_results,
-            "predictions_dir": str(predictions_dir),
-        }
+        if len(image_results) != len(images):
+            raise RuntimeError(f"validation predictions missing for {len(images) - len(image_results)} images")
+        return {"task_type": task_type, "dataset": inspection, "classes": _class_rows(model_names),
+                "metrics": _extract_metrics(validation, task_type),
+                "per_class_metrics": _extract_per_class_metrics(validation, task_type),
+                "images": [image_results[index] for index in range(len(images))],
+                "predictions_dir": str(predictions_dir)}
     finally:
         if adapter_dir is not None:
             shutil.rmtree(adapter_dir, ignore_errors=True)
@@ -438,23 +423,35 @@ def _evaluate_semantic(request, model, inspection):
     masks, names = label_masks(yaml_path)
     from backend.core.semantic import display_names
     _validate_class_names(display_names(_names(model.names)), names)
-    validation = model.val(data=yaml_path, split="val", imgsz=int(request["imgsz"]),
-                           batch=int(request["batch"]), workers=0, plots=False, save=False, verbose=False)
+    from backend.core.evaluation_validator import capture_validator
     output_dir = Path(inspection["dataset_root"]) / "predictions_xml" / request["evaluation_id"]
     output_dir.mkdir(parents=True, exist_ok=False)
-    images = []
-    for index, (path, mask) in enumerate(masks.items()):
+    sources = {str(Path(path).resolve()): index for index, path in enumerate(masks)}
+    original_shapes = {str(Path(label["im_file"]).resolve()): tuple(label["shape"]) for label in masks.dataset.labels}
+    images = {}
+
+    def emit(path, prediction, shape):
+        if path not in sources or sources[path] in images:
+            raise RuntimeError(f"validation returned unknown or duplicate image: {path}")
+        index = sources[path]
         image_id = f"eval_img_{index:06d}"
-        prediction = model.predict(source=path, imgsz=int(request["imgsz"]), save=False, verbose=False)[0]
-        labels = serialize_mask(mask, names, output_dir / f"{image_id}_label.png")
-        semantic = serialize_mask(prediction.semantic_mask.data, _names(prediction.names), output_dir / f"{image_id}_predict.png")
-        images.append({"image_id": image_id, "name": Path(path).name, "source_path": path,
-                       "width": labels["width"], "height": labels["height"], "labels": [], "detections": [],
-                       "semantic": semantic, "semantic_labels": labels})
+        labels = serialize_mask(masks[path], names, output_dir / f"{image_id}_label.png")
+        semantic = serialize_mask(prediction, names, output_dir / f"{image_id}_predict.png",
+                                  image_size=(shape[1], shape[0]))
+        images[index] = {"image_id": image_id, "name": Path(path).name, "source_path": path,
+                         "width": labels["width"], "height": labels["height"], "labels": [], "detections": [],
+                         "semantic": semantic, "semantic_labels": labels}
+
+    validation = model.val(validator=capture_validator("semantic", 0, emit, original_shapes), data=yaml_path, split="val",
+                           imgsz=int(request["imgsz"]), batch=int(request["batch"]),
+                           workers=0, plots=False, save=False, verbose=False)
+    if len(images) != len(sources):
+        raise RuntimeError(f"validation predictions missing for {len(sources) - len(images)} images")
     return {"task_type": "semantic", "dataset": inspection, "classes": _class_rows(names),
             "metrics": _extract_metrics(validation, "semantic"),
             "per_class_metrics": _extract_per_class_metrics(validation, "semantic"),
-            "images": images, "predictions_dir": str(output_dir)}
+            "images": [images[index] for index in range(len(sources))], "predictions_dir": str(output_dir)}
+
 
 
 def _serialize_boxes(result: Any, names: dict[int, str], task_type: str | None = None) -> list[dict[str, Any]]:

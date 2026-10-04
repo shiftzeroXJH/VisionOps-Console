@@ -627,8 +627,14 @@ export const api = {
   },
 
   async getWorkbenchEvaluation(evaluationId: string, datasetPath: string) {
-    const query = new URLSearchParams({ dataset_path: datasetPath });
+    const query = new URLSearchParams({ dataset_path: datasetPath, view: 'summary' });
     const res = await fetch(`/api/workbench/evaluations/${encodeURIComponent(evaluationId)}?${query.toString()}`);
+    if (!res.ok) await safeThrowError(res);
+    return res.json();
+  },
+
+  async getWorkbenchEvaluationImage(evaluationId: string, imageId: string, signal?: AbortSignal): Promise<WorkbenchImage> {
+    const res = await fetch(`/api/workbench/evaluations/${encodeURIComponent(evaluationId)}/images/${encodeURIComponent(imageId)}`, { signal });
     if (!res.ok) await safeThrowError(res);
     return res.json();
   }

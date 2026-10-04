@@ -6,6 +6,9 @@ import os
 import shutil
 import subprocess
 import re
+from collections import OrderedDict
+from contextlib import ExitStack
+from threading import Lock, RLock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
@@ -98,6 +101,9 @@ class WorkbenchService:
         self.repo = repo
         self.python_getter = python_getter
         self.cache_root = Path(cache_root or os.environ.get("YOLO_WORKBENCH_CACHE", ".workbench_cache")).resolve()
+        self._evaluation_lock = RLock()
+        self._thumbnail_locks = [Lock() for _ in range(16)]
+        self._evaluation_indexes: OrderedDict[str, tuple[tuple[int, int], dict[str, Any]]] = OrderedDict()
         ensure_dir(self.cache_root / "sessions")
         ensure_dir(self.cache_root / "evaluations")
         self.cleanup_expired()
@@ -365,14 +371,103 @@ class WorkbenchService:
                 "batch": batch,
             }
         )
-        write_json(evaluation_dir / "manifest.json", result)
         predictions_dir = Path(str(result.get("predictions_dir", ""))).resolve()
         dataset_root = Path(str(result.get("dataset", {}).get("dataset_root", ""))).resolve()
         expected_dir = (dataset_root / "predictions_xml" / evaluation_id).resolve()
         if predictions_dir != expected_dir or not predictions_dir.is_dir():
             raise WorkbenchError("evaluation returned an invalid predictions directory")
-        write_json(predictions_dir / "manifest.json", result)
-        return result
+        with self._evaluation_lock:
+            self._write_evaluation_json(evaluation_dir / "manifest.json", result)
+            self._write_evaluation_json(predictions_dir / "manifest.json", result)
+            self._build_evaluation_views(result, evaluation_dir)
+            self._build_evaluation_views(result, predictions_dir)
+            stat = (predictions_dir / "manifest.json").stat()
+            self._write_evaluation_json(evaluation_dir / "source_stamp.json", [stat.st_mtime_ns, stat.st_size, str(predictions_dir / "manifest.json")])
+            self._evaluation_indexes.pop(evaluation_id, None)
+        return self._evaluation_summary(result)
+
+    @staticmethod
+    def _write_evaluation_json(path: Path, payload: Any) -> None:
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            write_json(temporary, payload)
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _evaluation_summary(manifest: dict[str, Any]) -> dict[str, Any]:
+        summary = {key: value for key, value in manifest.items() if key != "images"}
+        summary["images"] = [
+            {key: item[key] for key in ("image_id", "name", "width", "height", "status") if key in item}
+            for item in manifest.get("images", [])
+        ]
+        summary["image_count"] = len(summary["images"])
+        return summary
+
+    def _build_evaluation_views(self, manifest: dict[str, Any], directory: Path) -> None:
+        details = ensure_dir(directory / "details")
+        index = {}
+        for item in manifest.get("images", []):
+            image_id = str(item.get("image_id", ""))
+            if not re.fullmatch(r"eval_img_\d+", image_id):
+                raise WorkbenchError("invalid evaluation image id")
+            self._write_evaluation_json(details / f"{image_id}.json", item)
+            index[image_id] = {"source_path": item["source_path"]}
+        self._write_evaluation_json(directory / "image_index.json", index)
+        # Write the summary last: its presence marks a complete derived view.
+        self._write_evaluation_json(directory / "summary.json", self._evaluation_summary(manifest))
+        stat = (directory / "manifest.json").stat()
+        self._write_evaluation_json(directory / "derived_stamp.json", [stat.st_mtime_ns, stat.st_size])
+
+    def _evaluation_index(self, evaluation_id: str) -> dict[str, Any]:
+        directory = self._evaluation_dir(evaluation_id)
+        manifest_path = directory / "manifest.json"
+        with self._evaluation_lock:
+            if not manifest_path.is_file():
+                raise WorkbenchError("evaluation not found")
+            stat = manifest_path.stat()
+            signature = (stat.st_mtime_ns, stat.st_size)
+            cached = self._evaluation_indexes.get(evaluation_id)
+            if cached and cached[0] == signature:
+                self._evaluation_indexes.move_to_end(evaluation_id)
+                return cached[1]
+            stamp_path = directory / "derived_stamp.json"
+            if (not stamp_path.is_file() or read_json(stamp_path) != list(signature)
+                    or not (directory / "summary.json").is_file() or not (directory / "image_index.json").is_file()):
+                self._build_evaluation_views(read_json(manifest_path), directory)
+            index = read_json(directory / "image_index.json")
+            self._evaluation_indexes[evaluation_id] = (signature, index)
+            self._evaluation_indexes.move_to_end(evaluation_id)
+            while len(self._evaluation_indexes) > 8:
+                self._evaluation_indexes.popitem(last=False)
+            return index
+
+    def evaluation_image_detail(self, evaluation_id: str, image_id: str) -> dict[str, Any]:
+        with self._evaluation_lock:
+            if image_id not in self._evaluation_index(evaluation_id):
+                raise WorkbenchError("image not found")
+            return read_json(self._evaluation_dir(evaluation_id) / "details" / f"{image_id}.json")
+
+    def evaluation_thumbnail_path(self, evaluation_id: str, image_id: str) -> Path:
+        # Image decoding must not hold the index lock or delay the selected original image.
+        with self._thumbnail_locks[hash((evaluation_id, image_id)) % len(self._thumbnail_locks)]:
+            source = self.evaluation_image_path(evaluation_id, image_id)
+            stat = source.stat()
+            directory = ensure_dir(self._evaluation_dir(evaluation_id) / "thumbnails")
+            target = directory / f"{image_id}_{stat.st_mtime_ns}_{stat.st_size}.jpg"
+            if not target.is_file():
+                temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+                try:
+                    with Image.open(source) as image:
+                        image.thumbnail((160, 160), Image.Resampling.LANCZOS)
+                        image.convert("RGB").save(temporary, "JPEG", quality=80)
+                    temporary.replace(target)
+                except (OSError, ValueError) as exc:
+                    raise WorkbenchError("could not generate image thumbnail") from exc
+                finally:
+                    temporary.unlink(missing_ok=True)
+            return target
 
     def list_evaluations(self, dataset_path: str) -> dict[str, Any]:
         dataset_root = self._evaluation_dataset_root(dataset_path)
@@ -386,7 +481,10 @@ class WorkbenchService:
                 if not manifest_path.is_file():
                     continue
                 try:
-                    manifest = read_json(manifest_path)
+                    summary_path = candidate / "summary.json"
+                    manifest = read_json(summary_path if summary_path.is_file() and summary_path.stat().st_mtime_ns >= manifest_path.stat().st_mtime_ns else manifest_path)
+                    if "image_count" not in manifest and isinstance(manifest, dict):
+                        self._write_evaluation_json(summary_path, self._evaluation_summary(manifest))
                     if not isinstance(manifest, dict):
                         continue
                     if manifest.get("evaluation_id") != candidate.name:
@@ -403,7 +501,7 @@ class WorkbenchService:
                             "conf": manifest.get("conf"),
                             "imgsz": manifest.get("imgsz"),
                             "batch": manifest.get("batch"),
-                            "image_count": len(manifest.get("images") or []),
+                            "image_count": manifest.get("image_count", len(manifest.get("images") or [])),
                             "metrics": manifest.get("metrics") or {},
                         }
                     )
@@ -412,13 +510,32 @@ class WorkbenchService:
         evaluations.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
         return {"dataset_root": str(dataset_root), "evaluations": evaluations}
 
-    def get_evaluation(self, dataset_path: str, evaluation_id: str) -> dict[str, Any]:
+    def get_evaluation(self, dataset_path: str, evaluation_id: str, view: str | None = None) -> dict[str, Any]:
+        if view not in (None, "summary"):
+            raise WorkbenchError("invalid evaluation view")
         if not self._valid_evaluation_id(evaluation_id):
             raise WorkbenchError("invalid evaluation id")
         dataset_root = self._evaluation_dataset_root(dataset_path)
         manifest_path = dataset_root / "predictions_xml" / evaluation_id / "manifest.json"
         if not manifest_path.is_file():
             raise WorkbenchError("evaluation not found")
+        if view == "summary":
+            with self._evaluation_lock:
+                directory = ensure_dir(self._evaluation_dir(evaluation_id))
+                source_stat = manifest_path.stat()
+                stamp = [source_stat.st_mtime_ns, source_stat.st_size, str(manifest_path)]
+                stamp_path = directory / "source_stamp.json"
+                if (not stamp_path.is_file() or read_json(stamp_path) != stamp
+                        or not (directory / "summary.json").is_file()):
+                    manifest = read_json(manifest_path)
+                    if not isinstance(manifest, dict) or manifest.get("evaluation_id") != evaluation_id:
+                        raise WorkbenchError("evaluation manifest id does not match its directory")
+                    self._write_evaluation_json(directory / "manifest.json", manifest)
+                    self._build_evaluation_views(manifest, directory)
+                    self._build_evaluation_views(manifest, manifest_path.parent)
+                    self._write_evaluation_json(stamp_path, stamp)
+                    self._evaluation_indexes.pop(evaluation_id, None)
+                return read_json(directory / "summary.json")
         try:
             manifest = read_json(manifest_path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -428,7 +545,10 @@ class WorkbenchService:
         if manifest.get("evaluation_id") != evaluation_id:
             raise WorkbenchError("evaluation manifest id does not match its directory")
         evaluation_dir = ensure_dir(self._evaluation_dir(evaluation_id))
-        write_json(evaluation_dir / "manifest.json", manifest)
+        with self._evaluation_lock:
+            self._write_evaluation_json(evaluation_dir / "manifest.json", manifest)
+            self._build_evaluation_views(manifest, evaluation_dir)
+            self._evaluation_indexes.pop(evaluation_id, None)
         return manifest
 
     def image_path(self, session_id: str, image_id: str) -> Path:
@@ -442,11 +562,7 @@ class WorkbenchService:
         return path
 
     def evaluation_image_path(self, evaluation_id: str, image_id: str) -> Path:
-        manifest_path = self._evaluation_dir(evaluation_id) / "manifest.json"
-        if not manifest_path.is_file():
-            raise WorkbenchError("evaluation not found")
-        manifest = read_json(manifest_path)
-        record = next((item for item in manifest.get("images", []) if item.get("image_id") == image_id), None)
+        record = self._evaluation_index(evaluation_id).get(image_id)
         if record is None:
             raise WorkbenchError("image not found")
         path = Path(record["source_path"]).resolve()
@@ -455,6 +571,14 @@ class WorkbenchService:
         return path
 
     def clear_cache(self) -> dict[str, Any]:
+        with ExitStack() as stack:
+            for lock in self._thumbnail_locks:
+                stack.enter_context(lock)
+            stack.enter_context(self._evaluation_lock)
+            return self._clear_cache_locked()
+
+    def _clear_cache_locked(self) -> dict[str, Any]:
+        self._evaluation_indexes.clear()
         files = 0
         size = 0
         if self.cache_root.exists():
@@ -471,6 +595,13 @@ class WorkbenchService:
         return {"deleted_dirs": 1 if files else 0, "deleted_files": files, "deleted_bytes": size}
 
     def cleanup_expired(self) -> None:
+        with ExitStack() as stack:
+            for lock in self._thumbnail_locks:
+                stack.enter_context(lock)
+            stack.enter_context(self._evaluation_lock)
+            self._cleanup_expired_locked()
+
+    def _cleanup_expired_locked(self) -> None:
         cutoff = datetime.now(timezone.utc) - CACHE_TTL
         for kind in ("sessions", "evaluations"):
             root = ensure_dir(self.cache_root / kind)
@@ -483,6 +614,8 @@ class WorkbenchService:
                     modified = datetime.fromtimestamp(modified_path.stat().st_mtime, timezone.utc)
                     if modified < cutoff:
                         shutil.rmtree(candidate)
+                        if kind == "evaluations":
+                            self._evaluation_indexes.pop(candidate.name, None)
                 except OSError:
                     continue
 
@@ -550,8 +683,13 @@ class WorkbenchService:
 
     def _evaluation_dataset_root(self, dataset_path: str) -> Path:
         path = self._absolute_existing_path(dataset_path, "dataset")
-        inspection = self.inspect_dataset(str(path))
-        root = Path(str(inspection.get("dataset_root", ""))).resolve()
+        if path.is_dir():
+            root = path
+        elif path.suffix.lower() in {".yaml", ".yml"}:
+            from backend.core.dataset import _parse_dataset_yaml, _resolve_dataset_base_path
+            root = _resolve_dataset_base_path(path, _parse_dataset_yaml(path).get("path"))
+        else:
+            raise WorkbenchError("dataset must be a directory or YAML file")
         if not root.is_dir():
             raise WorkbenchError("dataset root not found")
         return root
